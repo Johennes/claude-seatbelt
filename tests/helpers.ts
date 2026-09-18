@@ -99,6 +99,10 @@ export function sandboxRun(options: SandboxOptions): SandboxResult {
       CSB_WORKSPACE: "",
       CSB_EXTRA_DOMAINS: options.extraDomains,
       CSB_CLAUDE: "/bin/sh",
+      // Required, and never actually authenticated against: CSB_CLAUDE is
+      // /bin/sh. A test that is about the requirement itself clears it again
+      // through `env`.
+      CLAUDE_CODE_OAUTH_TOKEN: "test-token",
       ...options.env,
     },
   });

@@ -33,6 +33,7 @@ const config = {
     process.env["CSB_CLAUDE"] ||
     which("claude") ||
     die("'claude' not found in PATH (set CSB_CLAUDE)"),
+  token: process.env["CLAUDE_CODE_OAUTH_TOKEN"] ?? "",
 } as const;
 
 /** Split a space-separated list the way the shell would, dropping empties. */
@@ -87,6 +88,9 @@ function main(): never {
 
   // Ensure npx is available.
   const npx = which("npx") ?? die("'npx' not found in PATH; it fetches sandbox-runtime");
+
+  // Ensure we have a Claude token.
+  ensureToken();
 
   // Deny running in the user's home folder or the file system root.
   if (config.workspace === homeDir || config.workspace === "/") {
@@ -170,6 +174,17 @@ function ensureNodeJsVersion(major: number, minor: number): void {
   if (haveMajor < major || (haveMajor === major && haveMinor < minor)) {
     die(`Node >= ${major}.${minor} required, running ${process.versions.node}`);
   }
+}
+
+/** Ensure that a token was supplied for Claude, or exit explaining how to get one. */
+function ensureToken(): void {
+  if (config.token) return;
+  note(
+    "CLAUDE_CODE_OAUTH_TOKEN is not set, and the sandbox denies the macOS keychain." +
+      "Create a token outside the sandbox with `claude setup-token`, then export it" +
+      "before running claude-seatbelt.",
+  );
+  die("refusing to run without a token");
 }
 
 /**
@@ -286,6 +301,9 @@ function buildSrtSettings(opts: {
         // External disks, network shares and mounted images, any of which can
         // carry a second home directory.
         "/Volumes",
+        // The system keychains. Unlike this user's keychains, they do not sit
+        // under any of the regions above, and System.keychain is mode 0644.
+        "/Library/Keychains",
       ],
       allowRead: [
         // The repository being worked on.
@@ -319,9 +337,6 @@ function buildSrtSettings(opts: {
         // macOS preference plists, read on startup by the system libraries the
         // native binary links against.
         inHome("Library/Preferences"),
-        // The keychain, which holds the OAuth token and backs
-        // git-credential-osxkeychain.
-        inHome("Library/Keychains"),
         // Whatever else CSB_EXTRA_READ asks for.
         ...config.extraRead,
       ],
@@ -345,8 +360,6 @@ function buildSrtSettings(opts: {
         inHome(".claude.json.backup"),
         // Caches, Claude's own and those of the tools it shells out to.
         inHome(".cache"),
-        // Storing a refreshed OAuth token writes the keychain, not only reads it.
-        inHome("Library/Keychains"),
         // Whatever else CSB_EXTRA_WRITE asks for.
         ...config.extraWrite,
       ],

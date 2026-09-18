@@ -129,6 +129,12 @@ describe("the home directory", () => {
         `p write_claude_cmd   'echo x > $HOME/.claude/commands/injected.md'`,
         `p write_claude_agent 'echo x > $HOME/.claude/agents/injected.md'`,
         `p write_claude_stgs  'echo x > $HOME/.claude/settings.json'`,
+        `p list_keychains     'ls $HOME/Library/Keychains'`,
+        `p read_login_kc      'head -c 16 $HOME/Library/Keychains/login.keychain-db'`,
+        `p write_keychain_dir 'echo x > $HOME/Library/Keychains/injected'`,
+        `p list_sys_keychains 'ls /Library/Keychains'`,
+        `p read_sys_keychain  'head -c 16 /Library/Keychains/System.keychain'`,
+        `p read_oauth_secret  'security find-generic-password -a "$USER" -w -s "Claude Code-credentials"'`,
       ].join("\n"),
     });
   });
@@ -176,6 +182,37 @@ describe("the home directory", () => {
 
   it("host settings cannot be written", () => {
     assert.equal(sandbox.probe("write_claude_stgs"), "denied");
+  });
+
+  // Read access to a legacy keychain file is read access to every secret in it,
+  // because the Security framework opens it in the calling process rather than
+  // going through securityd. Write access can only be granted on the directory,
+  // which also grants deleting the keychain. Neither is given.
+  it("this user's keychain directory is not listable", () => {
+    assert.equal(sandbox.probe("list_keychains"), "denied");
+  });
+
+  it("the login keychain is not readable", () => {
+    assert.equal(sandbox.probe("read_login_kc"), "denied");
+  });
+
+  it("nothing can be written into the keychain directory", () => {
+    assert.equal(sandbox.probe("write_keychain_dir"), "denied");
+  });
+
+  // These two sit outside $HOME, /Users and /Volumes, so they are denied by
+  // their own rule rather than by any of the broad regions.
+  it("the system keychain directory is not listable", () => {
+    assert.equal(sandbox.probe("list_sys_keychains"), "denied");
+  });
+
+  it("the system keychain is not readable", () => {
+    assert.equal(sandbox.probe("read_sys_keychain"), "denied");
+  });
+
+  // The claim the file probes exist to support.
+  it("the stored OAuth token cannot be read back out of the keychain", () => {
+    assert.equal(sandbox.probe("read_oauth_secret"), "denied");
   });
 });
 

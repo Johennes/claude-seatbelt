@@ -14,6 +14,9 @@ controlled via environment variables. Only compatible with macOS for the moment.
   `/Users` and `/Volumes` are denied. Listed under [Paths](#paths).
 - **write** — the workspace, except `.git`, plus the caches and tmp directories
   Claude's tooling needs. Listed under [Paths](#paths).
+- **keychain** — denied by default, both directions, this user's and the
+  system's keychain. Claude authenticates from `CLAUDE_CODE_OAUTH_TOKEN` instead.
+  See [Authentication](#authentication) and [Keychains](#keychains).
 - **terminal** — pty access is allowed (srt's `allowPty`). Claude is a TUI, and
   without it `setRawMode` fails with `EPERM`, so it never receives a keystroke.
 
@@ -25,10 +28,46 @@ empty. Claude starts there either way.
 Node >= 20.11, and `npx` on `PATH`. sandbox-runtime itself needs no installing —
 `npx` fetches it.
 
+A `CLAUDE_CODE_OAUTH_TOKEN`, which is mandatory. See [Authentication](#authentication).
+
 ## Install
 
     pnpm install          # also builds, via the prepare script
     pnpm link --global    # puts `claude-seatbelt` on PATH
+
+## Authentication
+
+The sandbox denies the macOS keychain, so Claude cannot reach the credentials a
+normal `claude login` leaves there. Supply a long-lived OAuth token instead.
+
+Create one **outside** the sandbox, once:
+
+    claude setup-token
+
+That runs the browser flow and prints a token. Put it in the environment of
+whatever starts `claude-seatbelt`:
+
+    export CLAUDE_CODE_OAUTH_TOKEN='sk-ant-oat01-…'
+
+Better, keep it out of your shell profile and out of your history by reading it
+back from somewhere at call time — for instance from the host keychain, which is
+denied inside the sandbox but is still yours outside it:
+
+    security add-generic-password -a "$USER" -s claude-seatbelt -w
+    # Paste the token
+
+    export CLAUDE_CODE_OAUTH_TOKEN=$(security find-generic-password -a "$USER" -s claude-seatbelt -w)
+
+Without the token, the run is refused before srt is ever started. The token is
+passed through to Claude unchanged.
+
+Two consequences worth knowing:
+
+- The token is long-lived — roughly a year — and does not rotate. Anything that
+  can read the environment of the sandboxed process can use it.
+- `git`'s `credential.helper = osxkeychain` cannot work inside the sandbox. Use
+  SSH remotes, or put an HTTPS token in a file the sandbox can reach through
+  `CSB_EXTRA_READ` and point a different helper at it.
 
 ## Usage
 
@@ -58,6 +97,7 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 | `CSB_EXTRA_WRITE`    | empty   | Space-separated absolute paths to additionally open for writing. |
 | `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. |
 | `CSB_SRT_VERSION`    | `latest` | Which sandbox-runtime version `npx` fetches. Set a release (e.g. `0.0.76`) to pin it. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | **Required.** How Claude authenticates, the keychain being denied. See [Authentication](#authentication). |
 | `TMPDIR`             | `/tmp`  | Where the generated settings file is written, and one of the writable paths inside the sandbox. |
 | `HOME`               | — | Read to locate the config and cache paths listed under **read** above. |
 | `PATH`               | — | Searched for `claude`, `srt` and `npx`. |
@@ -104,8 +144,9 @@ roots are denied as whole regions and then re-opened path by path:
 | `$HOME` | This user's home, resolved through symlinks so that a `HOME` outside `/Users` is covered too. |
 | `/Users` | Every other account's home, and `/Users/Shared` with it. |
 | `/Volumes` | External disks, network shares and mounted images, any of which can carry a second home directory. |
+| `/Library/Keychains` | The system keychains. Unlike this user's keychain, they sit outside all three regions above, and `System.keychain` is mode 0644. |
 
-Everything outside those three stays readable, which is why `/usr`, `/opt` and
+Everything outside those four stays readable, which is why `/usr`, `/opt` and
 `/Applications` need no entry. Re-opened inside them:
 
 | Readable | Explanation |
@@ -120,7 +161,6 @@ Everything outside those three stays readable, which is why `/usr`, `/opt` and
 | `~/.local/state/claude` | Claude's runtime state, the lock files among it. |
 | `~/.cache` | Caches, Claude's own and those of the tools it shells out to. |
 | `~/Library/Preferences` | macOS preference plists, read on startup by the system libraries the native binary links against. |
-| `~/Library/Keychains` | The keychain, which holds the OAuth token and backs `git-credential-osxkeychain`. |
 | `$CSB_EXTRA_READ` | Whatever else you ask for. |
 
 Write is the other way round: denied by default, opened path by path, and then
@@ -135,7 +175,6 @@ closed again where an opened region contains something dangerous.
 | `~/.claude.json` | Updated in place as projects are opened and MCP servers are added. |
 | `~/.claude.json.backup` | The copy Claude writes beside it before rewriting the config. |
 | `~/.cache` | Caches, Claude's own and those of the tools it shells out to. |
-| `~/Library/Keychains` | Storing a refreshed OAuth token writes the keychain, not only reads it. |
 | `$CSB_EXTRA_WRITE` | Whatever else you ask for. |
 
 | Denied for writing | Explanation |
@@ -199,6 +238,6 @@ the sandboxed process failing to reach it is.
 | file | asks |
 | ---- | ---- |
 | `tests/network.test.ts` | what the sandboxed process can reach: exact vs subdomain entries, lookalike suffixes, non-443 ports, proxy bypass, raw TCP, DNS, LAN addresses |
-| `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, `CSB_EXTRA_READ` |
+| `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |

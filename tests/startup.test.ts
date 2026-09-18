@@ -71,6 +71,22 @@ describe("workspaces that must stop the run", () => {
   }
 });
 
+describe("CLAUDE_CODE_OAUTH_TOKEN", () => {
+  it("an unset token stops the run", () => {
+    const sandbox = run("example.com", workspace, { CLAUDE_CODE_OAUTH_TOKEN: "" });
+    assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+    assert.notEqual(sandbox.status, 0);
+  });
+
+  it("the refusal says how to get one", () => {
+    const sandbox = run("example.com", workspace, { CLAUDE_CODE_OAUTH_TOKEN: "" });
+    assert.ok(
+      sandbox.printed("claude setup-token"),
+      `expected the refusal to name the command, got:\n${sandbox.output}`,
+    );
+  });
+});
+
 describe("awkward characters in CSB_EXTRA_READ and CSB_EXTRA_WRITE", () => {
   it("a quote in CSB_EXTRA_READ does not stop the run", () => {
     const sandbox = run("example.com", workspace, {
