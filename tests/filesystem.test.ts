@@ -239,3 +239,76 @@ describe("CSB_EXTRA_READ", () => {
     assert.equal(sandbox.probe("write_extra"), "denied");
   });
 });
+
+describe("gitignored paths inside the workspace", () => {
+  let sandbox: SandboxResult;
+
+  before(() => {
+    sandbox = sandboxProbe({
+      extraDomains: "example.com",
+      cwd: workspace,
+      script: [
+        `p write_node_modules     'mkdir -p node_modules && echo x > node_modules/injected.js'`,
+        `p write_node_modules_bin 'mkdir -p node_modules/.bin && echo x > node_modules/.bin/pnpm'`,
+        `p write_node_modules_pkg 'mkdir -p node_modules/pkg && echo x > node_modules/pkg/index.js'`,
+        // A nested workspace has its own, which is why the patterns are "**".
+        `p write_nested_modules   'mkdir -p sub/node_modules && echo x > sub/node_modules/injected.js'`,
+
+        `p write_dotenv           'echo x > .env'`,
+        `p write_dotenv_local     'echo x > .env.local'`,
+        `p write_dotenv_prod      'echo x > .env.production.local'`,
+        `p write_nested_dotenv    'echo x > sub/.env'`,
+
+        // Tracked, so a change to it lands in the diff. Not denied.
+        `p write_dotenv_example   'echo x > .env.example'`,
+        // Neither is anything else in the workspace.
+        `p write_ordinary_file    'echo x > ordinary.ts'`,
+      ].join("\n"),
+    });
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("node_modules is not writable", () => {
+    assert.equal(sandbox.probe("write_node_modules"), "denied");
+  });
+
+  // The shims here are on PATH for every `pnpm run` typed on the host.
+  it("node_modules/.bin is not writable", () => {
+    assert.equal(sandbox.probe("write_node_modules_bin"), "denied");
+  });
+
+  it("an installed package is not writable", () => {
+    assert.equal(sandbox.probe("write_node_modules_pkg"), "denied");
+  });
+
+  it("a nested node_modules is not writable either", () => {
+    assert.equal(sandbox.probe("write_nested_modules"), "denied");
+  });
+
+  it(".env is not writable", () => {
+    assert.equal(sandbox.probe("write_dotenv"), "denied");
+  });
+
+  it(".env.local is not writable", () => {
+    assert.equal(sandbox.probe("write_dotenv_local"), "denied");
+  });
+
+  it(".env.<name>.local is not writable", () => {
+    assert.equal(sandbox.probe("write_dotenv_prod"), "denied");
+  });
+
+  it("a nested .env is not writable either", () => {
+    assert.equal(sandbox.probe("write_nested_dotenv"), "denied");
+  });
+
+  it(".env.example is still writable", () => {
+    assert.equal(sandbox.probe("write_dotenv_example"), "allowed");
+  });
+
+  it("the rest of the workspace is still writable", () => {
+    assert.equal(sandbox.probe("write_ordinary_file"), "allowed");
+  });
+});

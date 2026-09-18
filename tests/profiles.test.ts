@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 
-import { makeDir, type SandboxResult, sandboxProbe, sandboxRun } from "./helpers.ts";
+import {
+  makeDir,
+  repoRoot,
+  type SandboxResult,
+  sandboxProbe,
+  sandboxRun,
+  testTmp,
+  writeFile,
+} from "./helpers.ts";
 
 const SENTINEL = "SENTINEL_RAN";
 const workspace = makeDir("profiles-ws");
@@ -14,6 +23,18 @@ const token = { GH_TOKEN: "test-token" };
 
 const run = (env: Record<string, string>, script = `echo ${SENTINEL}`) =>
   sandboxRun({ extraDomains: "", cwd: workspace, script, env });
+
+/** Whether this machine's `pnpm` is one the base policy denies in the first place. */
+function pnpmIsUnderHome(): boolean {
+  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    try {
+      return fs.realpathSync(path.join(dir, "pnpm")).startsWith(`${os.homedir()}${path.sep}`);
+    } catch {
+      // Not this directory, keep looking.
+    }
+  }
+  return false;
+}
 
 describe("selecting profiles", () => {
   it("no CSB_PROFILES runs, and says nothing about profiles", () => {
@@ -150,8 +171,6 @@ describe("the gh profile, selected", () => {
   });
 });
 
-// The same probes without the profile. Without these, every assertion above
-// could be passing because of the base policy rather than because of gh.
 describe("the gh profile, not selected", () => {
   let sandbox: SandboxResult;
   const ghConfig = path.join(os.homedir(), ".config", "gh");
@@ -173,5 +192,61 @@ describe("the gh profile, not selected", () => {
 
   it("the GitHub API is not reachable", () => {
     assert.equal(sandbox.probe("reach_api"), "denied");
+  });
+});
+
+describe("the node profile", () => {
+  let sandbox: SandboxResult;
+  const messy = path.join(testTmp, "messy.ts");
+  const ugly = `export  const   x =   {a:1,b:2}\n`;
+
+  before(() => {
+    writeFile(messy, ugly);
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: repoRoot,
+      env: { CSB_PROFILES: "node" },
+      script: [
+        `p pnpm_resolves 'command -v pnpm'`,
+        `p pnpm_lint     'pnpm lint'`,
+        `p pnpm_format   'pnpm format:check'`,
+        // `pnpm format` differs from `format:check` only in writing, so the
+        // write is proven on a scratch file rather than by reformatting the
+        // repository from inside a test.
+        `p oxfmt_writes  'pnpm exec oxfmt "${messy}"'`,
+      ].join("\n"),
+    });
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("pnpm is on PATH", () => {
+    assert.equal(sandbox.probe("pnpm_resolves"), "allowed");
+  });
+
+  it("pnpm lint runs", () => {
+    assert.equal(sandbox.probe("pnpm_lint"), "allowed");
+  });
+
+  it("pnpm format:check runs", () => {
+    assert.equal(sandbox.probe("pnpm_format"), "allowed");
+  });
+
+  it("the formatter can rewrite a file in the workspace", () => {
+    assert.equal(sandbox.probe("oxfmt_writes"), "allowed");
+    assert.notEqual(fs.readFileSync(messy, "utf8"), ugly);
+  });
+});
+
+describe("the node profile, not selected", () => {
+  it("pnpm is out of reach without the profile", { skip: !pnpmIsUnderHome() }, () => {
+    const sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: repoRoot,
+      script: `p pnpm_resolves 'command -v pnpm'`,
+    });
+    assert.equal(sandbox.probe("pnpm_resolves"), "denied");
   });
 });

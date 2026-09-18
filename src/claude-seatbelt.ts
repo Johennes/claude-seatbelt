@@ -22,7 +22,7 @@ const BASE_DOMAINS = [
 const PERMITTED_PORTS = [80, 443] as const;
 
 /** The profiles shipped with the tool, beside dist/ in an installed package. */
-const BUILT_IN_PROFILES = path.join(import.meta.dirname, "..", "profiles.json");
+const BUILT_IN_PROFILES = path.join(import.meta.dirname, "..", "profiles.jsonc");
 
 /** Read environment variables and apply default values where needed. */
 const config = {
@@ -293,7 +293,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
 function readProfiles(file: string): Map<string, Profile> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    parsed = JSON.parse(stripJsonComments(fs.readFileSync(file, "utf8")));
   } catch (error) {
     die(`cannot read profiles from ${file}: ${error instanceof Error ? error.message : error}`);
   }
@@ -357,6 +357,66 @@ function readProfiles(file: string): Map<string, Profile> {
   }
 
   return profiles;
+}
+
+/** Replace line and block comments in the source string with nothing. */
+function stripJsonComments(source: string): string {
+  let result = "";
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let index = 0; index < source.length; index++) {
+    // charAt rather than indexing: it yields "" past the end instead of
+    // undefined, which keeps the comparisons below honest.
+    const char = source.charAt(index);
+    const next = source.charAt(index + 1);
+
+    if (inLineComment) {
+      if (char === "\n") {
+        inLineComment = false;
+        result += char;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        index++;
+      } else if (char === "\n") {
+        result += char;
+      }
+      continue;
+    }
+
+    if (inString) {
+      result += char;
+      if (char === "\\") {
+        // Whatever follows a backslash is literal, including a quote.
+        result += next;
+        index++;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      result += char;
+    } else if (char === "/" && next === "/") {
+      inLineComment = true;
+      index++;
+    } else if (char === "/" && next === "*") {
+      inBlockComment = true;
+      index++;
+    } else {
+      result += char;
+    }
+  }
+
+  return result;
 }
 
 /** Expand a leading "~/" the way srt would, so the two agree on what a path is. */
@@ -565,6 +625,18 @@ function buildSrtSettings(opts: {
         // Plugin code, which the host Claude loads and runs the same way.
         inHome(".claude/plugins"),
         inHome(".claude/plugins/**"),
+        // Installed packages, at any depth: a nested workspace has its own.
+        // node_modules/.bin is on PATH for every `pnpm run` typed on the host,
+        // and a package's entry point runs on the next command that imports it,
+        // so a file planted here executes outside the sandbox.
+        "**/node_modules",
+        "**/node_modules/**",
+        // Environment files, which are gitignored for the same reason and read
+        // by the host toolchain. NODE_OPTIONS="--require ./evil.js" in one of
+        // them runs on the next `node` invoked outside the sandbox.
+        "**/.env",
+        "**/.env.local",
+        "**/.env.*.local",
       ],
     },
     network: {

@@ -1,0 +1,48 @@
+{
+  "gh": {
+    "description": "The GitHub CLI, against the REST and GraphQL API only.",
+    "extraDomains": [
+      // REST and GraphQL both.
+      "api.github.com"
+      // Note that github.com is absent because the OAuth device flow lives
+      // at https://github.com/login/device/code.
+    ],
+    "extraRead": [
+      // config.yml and hosts.yml, which gh refuses to start without.
+      "~/.config/gh"
+    ],
+    "extraWrite": [],
+    "requiredEnv": [
+      // The GitHub token that gh will use.
+      "GH_TOKEN"
+    ],
+    "allowMachLookup": [
+      // gh is a Go binary, and Go on macOS verifies TLS through the Security
+      // framework rather than a CA bundle, so without this every request fails
+      // with `x509: OSStatus -26276`. srt warns that trustd is an exfiltration
+      // path in its own right — one that does not go through the proxy, and so
+      // is not bounded by the domain allowlist.
+      "com.apple.trustd.agent"
+    ]
+  },
+  "node": {
+    "description": "Node toolchains installed under $HOME, so package scripts run in the workspace.",
+    "extraDomains": [],
+    "extraRead": [
+      // nvm. Each version lands in versions/node/<version>, with that version's
+      // bin/ — node, npm, npx, and the corepack shims for pnpm and yarn — on
+      // PATH once nvm has been sourced from a shell rc file.
+      "~/.nvm",
+      // A standalone pnpm — the installer script rather than corepack — on the
+      // XDG layout. This is PNPM_HOME, holding the pnpm binary and the global
+      // content-addressable store beneath it.
+      "~/.local/share/pnpm",
+      // The same standalone pnpm at its macOS default, which is where `pnpm
+      // store path` reports on this machine.
+      "~/Library/pnpm"
+    ],
+    "extraWrite": [],
+    "requiredEnv": [],
+    "allowMachLookup": []
+  }
+}

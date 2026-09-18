@@ -181,6 +181,8 @@ closed again where an opened region contains something dangerous.
 | `~/.claude/settings.json` | The host-side settings, which grant permissions and can name hooks. |
 | `~/.claude/hooks`, `~/.claude/hooks/**` | Hook scripts, which the host Claude runs outside the sandbox. |
 | `~/.claude/plugins`, `~/.claude/plugins/**` | Plugin code, which the host Claude loads and runs the same way. |
+| `**/node_modules`, `**/node_modules/**` | Installed packages, at any depth — a nested workspace has its own. `node_modules/.bin` is on `PATH` for every `pnpm run` you type on the host. |
+| `**/.env`, `**/.env.local`, `**/.env.*.local` | Environment files, read by the host toolchain. |
 
 srt's own mandatory deny list already blocks writes to `.git/hooks`,
 `.git/config`, `.gitconfig`, `.gitmodules`, the shell rc files, `.ripgreprc`,
@@ -200,7 +202,7 @@ Profiles only ever widen. A profile cannot close anything the base policy opens,
 cannot reach past srt's own mandatory denies, and its domains go through the same
 grammar `CSB_EXTRA_DOMAINS` does.
 
-They live in one JSON file, `profiles.json` beside the package.
+They live in one file, `profiles.jsonc` beside the package.
 
 | Key | Meaning |
 | --- | ------- |
@@ -230,6 +232,27 @@ What the profile opens:
 | `~/.config/gh` | `config.yml` and `hosts.yml`, which `gh` refuses to start without. Neither holds the token. |
 | `GH_TOKEN` | Required. The run is refused if it is unset or empty. |
 | `com.apple.trustd.agent` | `gh` is a Go binary, and Go on macOS verifies TLS through the Security framework rather than a CA bundle, so without this every request fails with `x509: OSStatus -26276`. srt warns that trustd is an exfiltration path in its own right — one that does not go through the proxy, and so is not bounded by the domain allowlist. |
+
+### node
+
+Enables running `pnpm` and `nvm` in the workspace, for instance:
+
+    CSB_PROFILES="node" claude-seatbelt
+
+The profile opens the version manager roots for **reading**, and nothing else:
+
+| | |
+| --- | --- |
+| `~/.nvm` | nvm |
+| `~/.local/share/pnpm`, `~/Library/pnpm` | A standalone `pnpm` install, wherever `PNPM_HOME` points. |
+
+- **No `~/.npmrc`.** That is where a registry auth token lives, and neither
+  linting nor formatting needs one. Add it yourself if you use a private
+  registry, knowing that it hands Claude that token.
+- **No network, and no write outside the workspace.** So `pnpm install` is not
+  covered: it needs `registry.npmjs.org` in `CSB_EXTRA_DOMAINS` and a writable
+  store. Run installs outside the sandbox and let Claude use what is already in
+  `node_modules`.
 
 ## Running several at once
 
@@ -281,4 +304,4 @@ the sandboxed process failing to reach it is.
 | `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
-| `tests/profiles.test.ts` | what selecting `gh` adds, and what it still does not — each probe paired with the same one unselected |
+| `tests/profiles.test.ts` | what selecting `gh` or `node` adds, and what it still does not — each probe paired with the same one unselected |

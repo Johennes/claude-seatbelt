@@ -9,7 +9,7 @@
   },
   "files": [
     "dist",
-    "profiles.json"
+    "profiles.jsonc"
   ],
   "engines": {
     "node": ">=20.11"
