@@ -21,12 +21,16 @@ const BASE_DOMAINS = [
 /** What ports are allowed on domains. */
 const PERMITTED_PORTS = [80, 443] as const;
 
+/** The profiles shipped with the tool, beside dist/ in an installed package. */
+const BUILT_IN_PROFILES = path.join(import.meta.dirname, "..", "profiles.json");
+
 /** Read environment variables and apply default values where needed. */
 const config = {
   srtVersion: process.env["CSB_SRT_VERSION"] ?? "latest",
   extraDomains: words(process.env["CSB_EXTRA_DOMAINS"] ?? ""),
   extraRead: words(process.env["CSB_EXTRA_READ"] ?? ""),
   extraWrite: words(process.env["CSB_EXTRA_WRITE"] ?? ""),
+  profiles: words(process.env["CSB_PROFILES"] ?? ""),
   workspace: resolveDir(process.env["CSB_WORKSPACE"] || "."),
   tmpDir: resolveDir(process.env["TMPDIR"] || "/tmp"),
   claude:
@@ -115,12 +119,22 @@ function main(): never {
   process.on("SIGINT", () => {});
   process.on("SIGTERM", () => {});
 
+  // Load the selected profiles.
+  const profiles = applyProfiles(config.profiles);
+
   // Construct the srt settings.
-  const allowedDomains = buildAllowedDomains([...BASE_DOMAINS, ...config.extraDomains]);
+  const allowedDomains = buildAllowedDomains([
+    ...BASE_DOMAINS,
+    ...config.extraDomains,
+    ...profiles.extraDomains,
+  ]);
   const settings = buildSrtSettings({
     workdir: config.workspace,
     tmpDir: config.tmpDir,
     allowedDomains,
+    extraRead: [...config.extraRead, ...profiles.extraRead],
+    extraWrite: [...config.extraWrite, ...profiles.extraWrite],
+    allowMachLookup: profiles.allowMachLookup,
   });
 
   // Write the srt settings file.
@@ -185,6 +199,169 @@ function ensureToken(): void {
       "before running claude-seatbelt.",
   );
   die("refusing to run without a token");
+}
+
+/**
+ * A profile: a named bundle of additions, on top of what the base policy and
+ * the CSB_EXTRA_* variables already grant.
+ */
+interface Profile {
+  /** One line, for the reader of the profiles file. */
+  description?: string;
+  /** Appended to CSB_EXTRA_DOMAINS, and validated the same way. */
+  extraDomains?: string[];
+  /** Appended to CSB_EXTRA_READ. */
+  extraRead?: string[];
+  /** Appended to CSB_EXTRA_WRITE. */
+  extraWrite?: string[];
+  /** Environment variables the profile needs, by name. */
+  requiredEnv?: string[];
+  /** XPC/Mach services to open, srt's `network.allowMachLookup`. */
+  allowMachLookup?: string[];
+}
+
+/** The list-valued keys of a profile, all optional and all additive. */
+const PROFILE_LISTS = [
+  "extraDomains",
+  "extraRead",
+  "extraWrite",
+  "requiredEnv",
+  "allowMachLookup",
+] as const;
+
+/** What CSB_PROFILES adds up to, once the named profiles are applied in order. */
+interface ProfileAdditions {
+  extraDomains: string[];
+  extraRead: string[];
+  extraWrite: string[];
+  allowMachLookup: string[];
+}
+
+/**
+ * Apply the profiles named in CSB_PROFILES, in the order given.
+ *
+ * Nothing is deduplicated. A path or domain listed twice is harmless in srt, and
+ * collapsing them would only make the generated settings file harder to match up
+ * against the profiles that produced it.
+ */
+function applyProfiles(profiles: string[]): ProfileAdditions {
+  const additions: ProfileAdditions = {
+    extraDomains: [],
+    extraRead: [],
+    extraWrite: [],
+    allowMachLookup: [],
+  };
+
+  if (profiles.length === 0) {
+    return additions;
+  }
+
+  const available = readProfiles(BUILT_IN_PROFILES);
+  const missingEnv: string[] = [];
+
+  for (const name of config.profiles) {
+    const profile = available.get(name);
+    if (!profile) {
+      const known = [...available.keys()].toSorted().join(", ") || "none";
+      die(`unknown profile '${name}' (known: ${known})`);
+    }
+
+    additions.extraDomains.push(...(profile.extraDomains ?? []));
+    additions.extraRead.push(...(profile.extraRead ?? []).map(expandHome));
+    additions.extraWrite.push(...(profile.extraWrite ?? []).map(expandHome));
+    additions.allowMachLookup.push(...(profile.allowMachLookup ?? []));
+
+    for (const variable of profile.requiredEnv ?? []) {
+      if (!process.env[variable]) {
+        missingEnv.push(`${variable} (needed by profile '${name}')`);
+      }
+    }
+  }
+
+  if (missingEnv.length > 0) {
+    for (const missing of missingEnv) {
+      note(`environment variable is not set: ${missing}`);
+    }
+    die(`refusing to run: ${missingEnv.length} required environment variable(s) unset`);
+  }
+
+  note(`profiles ${config.profiles.join(" ")}`);
+  return additions;
+}
+
+/** Parse and validate the profiles file, or exit saying what is wrong with it. */
+function readProfiles(file: string): Map<string, Profile> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    die(`cannot read profiles from ${file}: ${error instanceof Error ? error.message : error}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    die(`${file} must contain a JSON object mapping profile names to profiles`);
+  }
+
+  const profiles = new Map<string, Profile>();
+  const rejections: string[] = [];
+
+  for (const [name, value] of Object.entries(parsed)) {
+    const where = `${file}: profile '${name}'`;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      rejections.push(`${where} is not an object`);
+      continue;
+    }
+
+    // Unknown keys are refused rather than ignored. A typo in a security
+    // boundary should stop the run, not quietly grant nothing.
+    const profile: Profile = {};
+    for (const [key, entry] of Object.entries(value)) {
+      if (key === "description") {
+        if (typeof entry !== "string") rejections.push(`${where}: 'description' must be a string`);
+        else profile.description = entry;
+        continue;
+      }
+      if (!(PROFILE_LISTS as readonly string[]).includes(key)) {
+        rejections.push(`${where}: unknown key '${key}'`);
+        continue;
+      }
+      if (!Array.isArray(entry) || entry.some((item) => typeof item !== "string" || !item)) {
+        rejections.push(`${where}: '${key}' must be an array of non-empty strings`);
+        continue;
+      }
+      profile[key as (typeof PROFILE_LISTS)[number]] = entry as string[];
+    }
+
+    // Paths reach srt verbatim, and srt takes absolute paths and "~" only.
+    for (const key of ["extraRead", "extraWrite"] as const) {
+      for (const entry of profile[key] ?? []) {
+        if (!entry.startsWith("/") && !entry.startsWith("~/")) {
+          rejections.push(`${where}: '${key}' entry '${entry}' is neither absolute nor under '~/'`);
+        }
+      }
+    }
+
+    for (const variable of profile.requiredEnv ?? []) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)) {
+        rejections.push(`${where}: '${variable}' is not a valid environment variable name`);
+      }
+    }
+
+    profiles.set(name, profile);
+  }
+
+  if (rejections.length > 0) {
+    for (const rejection of rejections) {
+      note(rejection);
+    }
+    die(`refusing to run: ${rejections.length} problem(s) in ${file}`);
+  }
+
+  return profiles;
+}
+
+/** Expand a leading "~/" the way srt would, so the two agree on what a path is. */
+function expandHome(target: string): string {
+  return target.startsWith("~/") ? path.join(homeDir, target.slice(2)) : target;
 }
 
 /**
@@ -268,6 +445,7 @@ interface SrtSettings {
     allowedDomains: string[];
     deniedDomains: string[];
     allowLocalBinding: boolean;
+    allowMachLookup: string[];
   };
   allowAppleEvents: boolean;
   allowPty: boolean;
@@ -284,8 +462,11 @@ function buildSrtSettings(opts: {
   workdir: string;
   tmpDir: string;
   allowedDomains: string[];
+  extraRead: string[];
+  extraWrite: string[];
+  allowMachLookup: string[];
 }): SrtSettings {
-  const { workdir, tmpDir, allowedDomains } = opts;
+  const { workdir, tmpDir, allowedDomains, extraRead, extraWrite, allowMachLookup } = opts;
   const inHome = (...parts: string[]): string => path.join(homeDir, ...parts);
 
   return {
@@ -337,8 +518,8 @@ function buildSrtSettings(opts: {
         // macOS preference plists, read on startup by the system libraries the
         // native binary links against.
         inHome("Library/Preferences"),
-        // Whatever else CSB_EXTRA_READ asks for.
-        ...config.extraRead,
+        // Whatever else CSB_EXTRA_READ and the selected profiles ask for.
+        ...extraRead,
       ],
       // Write is deny-by-default,so allowWrite lists what opens and denyWrite
       // re-closes parts of it.
@@ -360,8 +541,8 @@ function buildSrtSettings(opts: {
         inHome(".claude.json.backup"),
         // Caches, Claude's own and those of the tools it shells out to.
         inHome(".cache"),
-        // Whatever else CSB_EXTRA_WRITE asks for.
-        ...config.extraWrite,
+        // Whatever else CSB_EXTRA_WRITE and the selected profiles ask for.
+        ...extraWrite,
       ],
       // srt's own mandatory deny list already blocks writes to .git/hooks,
       // .git/config, .gitconfig, .gitmodules, the shell rc files, .ripgreprc,
@@ -390,6 +571,7 @@ function buildSrtSettings(opts: {
       allowedDomains,
       deniedDomains: [],
       allowLocalBinding: false,
+      allowMachLookup,
     },
     allowAppleEvents: false,
     // Claude is a TUI: without this, ioctl on the controlling terminal is denied

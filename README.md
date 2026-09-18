@@ -14,11 +14,8 @@ controlled via environment variables. Only compatible with macOS for the moment.
   `/Users` and `/Volumes` are denied. Listed under [Paths](#paths).
 - **write** — the workspace, except `.git`, plus the caches and tmp directories
   Claude's tooling needs. Listed under [Paths](#paths).
-- **keychain** — denied by default, both directions, this user's and the
-  system's keychain. Claude authenticates from `CLAUDE_CODE_OAUTH_TOKEN` instead.
-  See [Authentication](#authentication) and [Keychains](#keychains).
-- **terminal** — pty access is allowed (srt's `allowPty`). Claude is a TUI, and
-  without it `setRawMode` fails with `EPERM`, so it never receives a keystroke.
+- **profiles** — named bundles of additions for different use cases, in a JSON
+  file. Listed under [Profiles](#profiles).
 
 The workspace is `$CSB_WORKSPACE`, or the current directory when that is unset or
 empty. Claude starts there either way.
@@ -95,6 +92,7 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 | `CSB_EXTRA_DOMAINS`  | empty   | Space-separated domains to allow **on top of** the built-in list below. `.example.com` is the host and all subdomains; `example.com` is that host exactly. |
 | `CSB_EXTRA_READ`     | empty   | Space-separated absolute paths to additionally open for reading. |
 | `CSB_EXTRA_WRITE`    | empty   | Space-separated absolute paths to additionally open for writing. |
+| `CSB_PROFILES`       | empty   | Space-separated profile names, applied in the order given. See [Profiles](#profiles). |
 | `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. |
 | `CSB_SRT_VERSION`    | `latest` | Which sandbox-runtime version `npx` fetches. Set a release (e.g. `0.0.76`) to pin it. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | **Required.** How Claude authenticates, the keychain being denied. See [Authentication](#authentication). |
@@ -191,6 +189,48 @@ those need no entry of their own. `CSB_EXTRA_WRITE` cannot reopen them either:
 srt emits the allow rules first and its own denies last, and in a Seatbelt
 profile the last matching rule wins.
 
+## Profiles
+
+A profile is a named bundle of additions for one tool, selected with
+`CSB_PROFILES` and applied in the order you name them:
+
+    CSB_PROFILES="gh" claude-seatbelt
+
+Profiles only ever widen. A profile cannot close anything the base policy opens,
+cannot reach past srt's own mandatory denies, and its domains go through the same
+grammar `CSB_EXTRA_DOMAINS` does.
+
+They live in one JSON file, `profiles.json` beside the package.
+
+| Key | Meaning |
+| --- | ------- |
+| `description` | One line, for whoever reads the file. Ignored otherwise. |
+| `extraDomains` | Appended to `CSB_EXTRA_DOMAINS`. |
+| `extraRead` | Appended to `CSB_EXTRA_READ`. Absolute, or under `~/`. |
+| `extraWrite` | Appended to `CSB_EXTRA_WRITE`. Absolute, or under `~/`. |
+| `requiredEnv` | Environment variables the tool needs, by name. They are inherited from the caller like everything else; naming them here turns a tool that misbehaves silently without its credential into a run that is refused. |
+| `allowMachLookup` | XPC/Mach services to open, srt's `network.allowMachLookup`. |
+
+### gh
+
+Makes the GitHub CLI work against the REST and GraphQL API.
+
+    export GH_TOKEN=$(gh auth token)      # outside the sandbox
+    CSB_PROFILES="gh" claude-seatbelt
+
+`gh` keeps its own token in the macOS keyring, which the sandbox denies, so the
+token has to come in through `GH_TOKEN`. **Give that token read-only scope.** It
+is readable inside the sandbox — `gh auth token`, `env`, anything Claude can run.
+
+What the profile opens:
+
+| | |
+| --- | --- |
+| `api.github.com` | REST and GraphQL. **Not** `github.com`, so the OAuth device flow (`github.com/login/device/code`) has nowhere to go and a *new* token cannot be minted inside the sandbox. `open` is blocked too, so no browser flow either. |
+| `~/.config/gh` | `config.yml` and `hosts.yml`, which `gh` refuses to start without. Neither holds the token. |
+| `GH_TOKEN` | Required. The run is refused if it is unset or empty. |
+| `com.apple.trustd.agent` | `gh` is a Go binary, and Go on macOS verifies TLS through the Security framework rather than a CA bundle, so without this every request fails with `x509: OSStatus -26276`. srt warns that trustd is an exfiltration path in its own right — one that does not go through the proxy, and so is not bounded by the domain allowlist. |
+
 ## Running several at once
 
 Concurrent instances in different directories are fine, and nothing needs to be
@@ -241,3 +281,4 @@ the sandboxed process failing to reach it is.
 | `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
+| `tests/profiles.test.ts` | what selecting `gh` adds, and what it still does not — each probe paired with the same one unselected |

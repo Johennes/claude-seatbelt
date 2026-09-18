@@ -1,0 +1,10 @@
+{
+  "gh": {
+    "description": "The GitHub CLI, against the REST and GraphQL API only.",
+    "extraDomains": ["api.github.com"],
+    "extraRead": ["~/.config/gh"],
+    "extraWrite": [],
+    "requiredEnv": ["GH_TOKEN"],
+    "allowMachLookup": ["com.apple.trustd.agent"]
+  }
+}
