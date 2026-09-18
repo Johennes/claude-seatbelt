@@ -124,6 +124,7 @@ describe("the home directory", () => {
         `p read_aws           'cat $HOME/.aws/credentials'`,
         `p read_claude_config 'cat $HOME/.claude.json'`,
         `p read_gitconfig     'cat $HOME/.gitconfig'`,
+        `p write_gitconfig    'echo "# claude-seatbelt probe" >> $HOME/.gitconfig'`,
         `p write_claude_hook  'echo x > $HOME/.claude/hooks/injected.sh'`,
         `p write_claude_cmd   'echo x > $HOME/.claude/commands/injected.md'`,
         `p write_claude_agent 'echo x > $HOME/.claude/agents/injected.md'`,
@@ -150,6 +151,13 @@ describe("the home directory", () => {
 
   it("the git config is readable", () => {
     assert.equal(sandbox.probe("read_gitconfig"), "allowed");
+  });
+
+  // Read is opened for ~/.gitconfig, write never is, and srt's own mandatory
+  // deny list closes it a second time. A commit hook or a credential helper
+  // planted there would run outside the sandbox.
+  it("the git config cannot be written", () => {
+    assert.equal(sandbox.probe("write_gitconfig"), "denied");
   });
 
   // ~/.claude is writable as a whole, so these four have to be denied by the
