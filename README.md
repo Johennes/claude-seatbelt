@@ -8,7 +8,8 @@ controlled via environment variables. Only compatible with macOS for the moment.
 - **network** — denied, except a built-in list of the domains Claude itself needs
   plus anything in `CSB_EXTRA_DOMAINS`, reached through srt's proxies. srt also
   refuses any name that resolves to loopback, link-local, one of this host's own
-  interface addresses, or a cloud metadata endpoint.
+  interface addresses, or a cloud metadata endpoint. Listed under
+  [Domains](#domains).
 - **read** — the workspace, plus the paths Claude needs. The rest of `$HOME`,
   `/Users` and `/Volumes` are denied. Listed under [Paths](#paths).
 - **write** — the workspace, except `.git`, plus the caches and tmp directories
@@ -66,8 +67,14 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 Two layers. The built-in list is what Claude itself needs to hold a session, is
 always allowed, and is not configurable — without it there is nothing to sandbox:
 
-`api.anthropic.com`, `platform.claude.com`, `claude.com`, `claude.ai`,
-`mcp-proxy.anthropic.com`, `downloads.claude.ai`
+| domain | why |
+| ------ | --- |
+| `api.anthropic.com` | The Messages API. Every request to the model goes here, so nothing works without it. |
+| `claude.com` | The OAuth authorize endpoint, `/cai/oauth/authorize`, which is where logging in starts. |
+| `claude.ai` | The subscription side of the same account: the client metadata for that OAuth flow, the usage and settings pages Claude links to, and the `/code/…` endpoints behind artifacts and routines. |
+| `platform.claude.com` | The console side, where the OAuth flow lands instead for an API-billed account, along with credits, billing and the API documentation. |
+| `mcp-proxy.anthropic.com` | The proxy for remote MCP connectors. Without it, a connector configured on the account cannot be reached. |
+| `downloads.claude.ai` | Release metadata under `/claude-code-releases`, and the official plugin marketplace beneath it. Self-updating is off — the spawn sets `DISABLE_AUTOUPDATER=1` — but plugin installs still come from here. |
 
 Everything a *project* needs goes in `CSB_EXTRA_DOMAINS`, so the reach granted to a
 workspace is a deliberate per-workspace decision rather than a default everyone
