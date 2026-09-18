@@ -277,54 +277,98 @@ function buildSrtSettings(opts: {
     filesystem: {
       // Read is allow-by-default in srt, so the home directory and the other user
       // data roots are denied as whole regions and then re-opened path by path.
-      denyRead: [homeDir, "/Users", "/Volumes"],
+      denyRead: [
+        // This user's home, resolved through symlinks so that a HOME outside
+        // /Users is covered too.
+        homeDir,
+        // Every other account's home, and /Users/Shared with it.
+        "/Users",
+        // External disks, network shares and mounted images, any of which can
+        // carry a second home directory.
+        "/Volumes",
+      ],
       allowRead: [
+        // The repository being worked on.
         workdir,
+        // Claude's own configuration: settings, agents, commands, skills, etc.
         inHome(".claude"),
+        // The account record, the MCP server definitions and the per-project
+        // history, all read at startup.
         inHome(".claude.json"),
+        // Git identity, aliases, includes and the credential helper, read by
+        // every git invocation. Writing it is denied by srt itself.
         inHome(".gitconfig"),
+        // The shell startup files, sourced whenever a command is run. Without
+        // them the shell starts with neither PATH nor the rest of the
+        // environment the user expects.
         inHome(".zshrc"),
         inHome(".zshenv"),
         inHome(".zprofile"),
         inHome(".bashrc"),
         inHome(".bash_profile"),
         inHome(".profile"),
+        // Where the native installer puts the `claude` symlink, alongside the
+        // user's other command line tools.
         inHome(".local/bin"),
+        // One directory per installed Claude version. Denying it leaves Claude unable to start.
         inHome(".local/share/claude"),
+        // Claude's runtime state, the lock files among it.
         inHome(".local/state/claude"),
-        inHome(".nvm"),
+        // Caches, Claude's own and those of the tools it shells out to.
         inHome(".cache"),
-        inHome(".npm"),
+        // macOS preference plists, read on startup by the system libraries the
+        // native binary links against.
         inHome("Library/Preferences"),
+        // The keychain, which holds the OAuth token and backs
+        // git-credential-osxkeychain.
         inHome("Library/Keychains"),
+        // Whatever else CSB_EXTRA_READ asks for.
         ...config.extraRead,
       ],
       // Write is deny-by-default,so allowWrite lists what opens and denyWrite
       // re-closes parts of it.
       allowWrite: [
+        // The repository being worked on, which is the point of the exercise.
         workdir,
+        // $TMPDIR, where Claude and the tools it runs put their scratch files.
         tmpDir,
+        // The system temp directories, which $TMPDIR is not. /tmp resolves to
+        // the first of them and plenty of tools hardcode it.
         "/private/tmp",
         "/private/var/tmp",
+        // Session transcripts, todos and project state, all written as Claude
+        // runs. The denyWrite entries below close the dangerous parts again.
         inHome(".claude"),
+        // Updated in place as projects are opened and MCP servers are added.
         inHome(".claude.json"),
+        // The copy Claude writes beside it before rewriting the config.
         inHome(".claude.json.backup"),
+        // Caches, Claude's own and those of the tools it shells out to.
         inHome(".cache"),
-        inHome(".npm"),
+        // Storing a refreshed OAuth token writes the keychain, not only reads it.
         inHome("Library/Keychains"),
+        // Whatever else CSB_EXTRA_WRITE asks for.
         ...config.extraWrite,
       ],
       // srt's own mandatory deny list already blocks writes to .git/hooks,
-      // .git/config, .gitconfig, the shell rc files, .mcp.json, .vscode/, .idea/,
-      // .claude/commands/ and .claude/agents/ — those need no entry here.
+      // .git/config, .gitconfig, .gitmodules, the shell rc files, .ripgreprc,
+      // .mcp.json, .vscode/, .idea/, .claude/commands/ and .claude/agents/ —
+      // those need no entry here. srt emits its denies after every allow, and the
+      // last matching rule in a Seatbelt profile wins, so extraWrite cannot
+      // reopen them either.
       denyWrite: [
-        // Deny writing git metadata (commits, hooks).
+        // Git metadata, anywhere below a writable root. A hook planted here runs
+        // on the host the next time git is invoked, and history is not Claude's
+        // to rewrite behind the user's back. The directory and its contents are
+        // separate patterns because one does not imply the other.
         "**/.git",
         "**/.git/**",
-        // Deny writing the host-side Claude config.
+        // The host-side settings, which grant permissions and can name hooks.
         inHome(".claude/settings.json"),
+        // Hook scripts, which the host Claude runs outside the sandbox.
         inHome(".claude/hooks"),
         inHome(".claude/hooks/**"),
+        // Plugin code, which the host Claude loads and runs the same way.
         inHome(".claude/plugins"),
         inHome(".claude/plugins/**"),
       ],

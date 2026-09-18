@@ -10,9 +10,9 @@ controlled via environment variables. Only compatible with macOS for the moment.
   refuses any name that resolves to loopback, link-local, one of this host's own
   interface addresses, or a cloud metadata endpoint.
 - **read** — the workspace, plus the paths Claude needs. The rest of `$HOME`,
-  `/Users` and `/Volumes` are denied.
+  `/Users` and `/Volumes` are denied. Listed under [Paths](#paths).
 - **write** — the workspace, except `.git`, plus the caches and tmp directories
-  Claude's tooling needs.
+  Claude's tooling needs. Listed under [Paths](#paths).
 - **terminal** — pty access is allowed (srt's `allowPty`). Claude is a TUI, and
   without it `setRawMode` fails with `EPERM`, so it never receives a keystroke.
 
@@ -86,6 +86,64 @@ An srt allowlist entry without a `:port` suffix matches every port, so an
 allowlisted host could be reached on 22. Each entry is therefore emitted twice,
 as `:80` and `:443`. If you need an allowlisted host on another port, that is the
 loop to change.
+
+### Paths
+
+Read is allow-by-default in srt, so the home directory and the other user data
+roots are denied as whole regions and then re-opened path by path:
+
+| Denied for reading | Explanation |
+| ------------------ | ----------- |
+| `$HOME` | This user's home, resolved through symlinks so that a `HOME` outside `/Users` is covered too. |
+| `/Users` | Every other account's home, and `/Users/Shared` with it. |
+| `/Volumes` | External disks, network shares and mounted images, any of which can carry a second home directory. |
+
+Everything outside those three stays readable, which is why `/usr`, `/opt` and
+`/Applications` need no entry. Re-opened inside them:
+
+| Readable | Explanation |
+| -------- | ----------- |
+| the workspace | The repository being worked on. |
+| `~/.claude` | Claude's own configuration: settings, agents, commands, skills, etc. |
+| `~/.claude.json` | The account record, the MCP server definitions and the per-project history, all read at startup. |
+| `~/.gitconfig` | Git identity, aliases, includes and the credential helper, read by every git invocation. |
+| `~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile` | The shell startup files, sourced whenever a command is run. Without them the shell starts with neither `PATH` nor the rest of the environment you expect. |
+| `~/.local/bin` | Where the native installer puts the `claude` symlink, alongside your other command line tools. |
+| `~/.local/share/claude` | One directory per installed Claude version. Denying it leaves Claude unable to start. |
+| `~/.local/state/claude` | Claude's runtime state, the lock files among it. |
+| `~/.cache` | Caches, Claude's own and those of the tools it shells out to. |
+| `~/Library/Preferences` | macOS preference plists, read on startup by the system libraries the native binary links against. |
+| `~/Library/Keychains` | The keychain, which holds the OAuth token and backs `git-credential-osxkeychain`. |
+| `$CSB_EXTRA_READ` | Whatever else you ask for. |
+
+Write is the other way round: denied by default, opened path by path, and then
+closed again where an opened region contains something dangerous.
+
+| Writable | Explanation |
+| -------- | ----------- |
+| the workspace | The repository being worked on, which is the point of the exercise. |
+| `$TMPDIR` | Where Claude and the tools it runs put their scratch files. |
+| `/private/tmp`, `/private/var/tmp` | The system temp directories, which `$TMPDIR` is not. `/tmp` resolves to the first of them and plenty of tools hardcode it. |
+| `~/.claude` | Session transcripts, todos and project state, all written as Claude runs. |
+| `~/.claude.json` | Updated in place as projects are opened and MCP servers are added. |
+| `~/.claude.json.backup` | The copy Claude writes beside it before rewriting the config. |
+| `~/.cache` | Caches, Claude's own and those of the tools it shells out to. |
+| `~/Library/Keychains` | Storing a refreshed OAuth token writes the keychain, not only reads it. |
+| `$CSB_EXTRA_WRITE` | Whatever else you ask for. |
+
+| Denied for writing | Explanation |
+| ------------------ | ----------- |
+| `**/.git`, `**/.git/**` | Git metadata, anywhere below a writable root. |
+| `~/.claude/settings.json` | The host-side settings, which grant permissions and can name hooks. |
+| `~/.claude/hooks`, `~/.claude/hooks/**` | Hook scripts, which the host Claude runs outside the sandbox. |
+| `~/.claude/plugins`, `~/.claude/plugins/**` | Plugin code, which the host Claude loads and runs the same way. |
+
+srt's own mandatory deny list already blocks writes to `.git/hooks`,
+`.git/config`, `.gitconfig`, `.gitmodules`, the shell rc files, `.ripgreprc`,
+`.mcp.json`, `.vscode/`, `.idea/`, `.claude/commands/` and `.claude/agents/`, so
+those need no entry of their own. `CSB_EXTRA_WRITE` cannot reopen them either:
+srt emits the allow rules first and its own denies last, and in a Seatbelt
+profile the last matching rule wins.
 
 ## Running several at once
 
