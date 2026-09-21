@@ -4,7 +4,17 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 
-import { makeDir, repoRoot, sandboxProbe, type SandboxResult, writeFile } from "./helpers.ts";
+import {
+  inHome,
+  makeDir,
+  repoRoot,
+  sandboxProbe,
+  type SandboxResult,
+  skipUnlessPresent,
+  writeFile,
+} from "./helpers.ts";
+
+const claudeCache = inHome(".cache", "claude");
 
 // The workspace, and a sibling that is not it. Both are outside every path the
 // policy opens up, so the sibling is denied for the reason under test.
@@ -164,11 +174,11 @@ describe("the home directory", () => {
     assert.equal(sandbox.probe("read_aws"), "denied");
   });
 
-  it("the claude config is readable", () => {
+  it("the claude config is readable", { skip: skipUnlessPresent(inHome(".claude.json")) }, () => {
     assert.equal(sandbox.probe("read_claude_config"), "allowed");
   });
 
-  it("the git config is readable", () => {
+  it("the git config is readable", { skip: skipUnlessPresent(inHome(".gitconfig")) }, () => {
     assert.equal(sandbox.probe("read_gitconfig"), "allowed");
   });
 
@@ -205,11 +215,11 @@ describe("the home directory", () => {
     assert.equal(sandbox.probe("list_keychains"), "denied");
   });
 
-  it("Claude's own cache is readable", () => {
+  it("Claude's own cache is readable", { skip: skipUnlessPresent(claudeCache) }, () => {
     assert.equal(sandbox.probe("read_claude_cache"), "allowed");
   });
 
-  it("Claude's own cache is writable", () => {
+  it("Claude's own cache is writable", { skip: skipUnlessPresent(claudeCache) }, () => {
     assert.equal(sandbox.probe("write_claude_cache"), "allowed");
   });
 

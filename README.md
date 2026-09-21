@@ -243,8 +243,10 @@ The profile opens the version manager roots for **reading**, and nothing else:
 
 | | |
 | --- | --- |
-| `~/.nvm` | nvm |
+| `~/.nvm`, `~/.config/nvm` | nvm, in both places it puts itself. |
+| `~/.nodenv` | nodenv, whose shims/ dispatch to versions/<version>. |
 | `~/.local/share/pnpm`, `~/Library/pnpm` | A standalone `pnpm` install, wherever `PNPM_HOME` points. |
+| `~/.npm-global`, `~/.npm-packages` | The two conventional homes for an npm prefix moved out of `/usr/local`, which is where `npm install -g pnpm` then puts it. |
 | `~/.cache/node` | Corepack's download cache, which holds the `pnpm` and `yarn` it dispatches to. |
 
 - **No `~/.npmrc`.** That is where a registry auth token lives, and neither
@@ -306,3 +308,5 @@ the sandboxed process failing to reach it is.
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
 | `tests/profiles.test.ts` | what selecting `gh` or `node` adds, and what it still does not — each probe paired with the same one unselected |
+
+Note that some tests are skipped when run under GitHub actions due to environment restrictions.
