@@ -154,6 +154,55 @@ describe("requiredEnv", () => {
   });
 });
 
+// pbpaste rather than pbcopy: both reach the pasteboard through the same Mach
+// service, so either proves the grant, and only one of them would leave probe
+// output on whoever is running the tests' clipboard. The probe helper discards
+// the command's output, so nothing on the clipboard reaches the test log either.
+describe("the clipboard profile", () => {
+  let sandbox: SandboxResult;
+
+  before(() => {
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      env: { CSB_PROFILES: "clipboard" },
+      script: [
+        `p reach_pasteboard 'pbpaste'`,
+        // The grant is one Mach service, not the run of them.
+        `p read_login_kc 'head -c 16 "$HOME/Library/Keychains/login.keychain-db"'`,
+        `p reach_example 'curl -sS -o /dev/null --max-time 15 https://example.com'`,
+      ].join("\n"),
+    });
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("the pasteboard is reachable", () => {
+    assert.equal(sandbox.probe("reach_pasteboard"), "allowed");
+  });
+
+  it("the keychain is still denied", () => {
+    assert.equal(sandbox.probe("read_login_kc"), "denied");
+  });
+
+  it("the network is still denied", () => {
+    assert.equal(sandbox.probe("reach_example"), "denied");
+  });
+});
+
+describe("the clipboard profile, not selected", () => {
+  it("the pasteboard is out of reach without the profile", () => {
+    const sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      script: `p reach_pasteboard 'pbpaste'`,
+    });
+    assert.equal(sandbox.probe("reach_pasteboard"), "denied");
+  });
+});
+
 describe("the gh profile, selected", () => {
   let sandbox: SandboxResult;
   const ghConfig = inHome(".config", "gh");

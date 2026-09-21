@@ -223,6 +223,35 @@ They live in one file, `profiles.jsonc` beside the package.
 | `allowMachLookup` | XPC/Mach services to open, srt's `network.allowMachLookup`. |
 | `requiredEnv` | Environment variables the tool needs, by name. They are inherited from the caller like everything else; naming them here turns a tool that misbehaves silently without its credential into a run that is refused. |
 
+### clipboard
+
+Makes copying out of the TUI work, by opening one Mach service:
+
+    CSB_PROFILES="clipboard" claude-seatbelt
+
+| | |
+| --- | --- |
+| `com.apple.pasteboard.1` | The pasteboard server, which `pbcopy` and `pbpaste` talk to. Without it `pbcopy` exits 1. |
+
+**Try your terminal's OSC 52 setting first.** Claude emits `\x1b]52;c;<base64>`
+down the pty alongside its `pbcopy` call, and that path needs nothing from the
+sandbox. Terminals refuse it by default; turning it on is write-only and costs no
+privilege at all:
+
+| terminal | setting |
+| --- | --- |
+| iTerm2 | Settings → General → Selection → "Applications in terminal may access clipboard" |
+| Ghostty | `clipboard-write = allow` |
+| kitty | `clipboard_control write-clipboard write-primary` |
+| WezTerm | on by default |
+| Terminal.app | no OSC 52 support, so this profile is the only route |
+
+What the profile costs, if you take it: the grant is two-way. `pbpaste` starts
+working at the same moment, so whatever is on the host clipboard — a password
+manager's last copy among it — is readable inside the sandbox, and
+`api.anthropic.com` is open. srt warns separately that a Mach service is a
+channel of its own, outside the proxy and so outside the domain allowlist.
+
 ### gh
 
 Makes the GitHub CLI work against the REST and GraphQL API.
@@ -395,6 +424,6 @@ the sandboxed process failing to reach it is.
 | `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
-| `tests/profiles.test.ts` | what selecting `gh`, `git-writable`, `node` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
+| `tests/profiles.test.ts` | what selecting `clipboard`, `gh`, `git-writable`, `node` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
 
 Note that some tests are skipped when run under GitHub actions due to environment restrictions.

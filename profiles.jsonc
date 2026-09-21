@@ -1,4 +1,19 @@
 {
+  "clipboard": {
+    "description": "pbcopy and pbpaste, for copying out of the TUI on a terminal without OSC 52.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
+    "allowMachLookup": [
+      // The pasteboard server. Without it pbcopy exits 1, and Claude reports a
+      // successful copy regardless: it spawns pbcopy without awaiting it.
+      //
+      // The grant is two-way. pbpaste starts working at the same time, so
+      // whatever is on the host clipboard is readable inside the sandbox.
+      "com.apple.pasteboard.1"
+    ],
+    "requiredEnv": []
+  },
   "gh": {
     "description": "The GitHub CLI, against the REST and GraphQL API only.",
     "extraDomains": [
