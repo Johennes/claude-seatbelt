@@ -25,6 +25,28 @@
       "GH_TOKEN"
     ]
   },
+  "git-writable": {
+    "description": "Local git writes — add, commit, branch, stash, rebase. Push remains denied.",
+    "extraDomains": [
+      // github.com is *not* allow-listed, so pushes won't work.
+    ],
+    "extraRead": [],
+    "extraWrite": [],
+    "denyWriteOverrides": {
+      "**/.git": [
+        // srt's own mandatory denies close .git/hooks and .git/config but only
+        // at the root level, not in submodules and worktrees.
+        "**/.git/modules/**/hooks",
+        "**/.git/worktrees/**/hooks",
+        "**/.git/modules/**/config",
+        "**/.git/config.worktree",
+        "**/.git/modules/**/config.worktree",
+        "**/.git/worktrees/**/config.worktree"
+      ]
+    },
+    "allowMachLookup": [],
+    "requiredEnv": []
+  },
   "node": {
     "description": "Node toolchains installed under $HOME, so package scripts run in the workspace.",
     "extraDomains": [],

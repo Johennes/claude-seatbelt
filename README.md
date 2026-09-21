@@ -65,9 +65,13 @@ Two consequences worth knowing:
 
 - The token is long-lived — roughly a year — and does not rotate. Anything that
   can read the environment of the sandboxed process can use it.
-- `git`'s `credential.helper = osxkeychain` cannot work inside the sandbox. Use
-  SSH remotes, or put an HTTPS token in a file the sandbox can reach through
-  `CSB_EXTRA_READ` and point a different helper at it.
+- `git`'s `credential.helper = osxkeychain` cannot work inside the sandbox. It
+  rarely comes up, because no forge host is in the allowlist to begin with:
+  `push`, `fetch`, `pull` and `clone` have nowhere to go, with or without a
+  credential. Should you open one with `CSB_EXTRA_DOMAINS`, put an HTTPS token in
+  a file the sandbox can reach through `CSB_EXTRA_READ` and point a different
+  helper at it. SSH remotes are not an alternative: allowlist entries are emitted
+  on ports 80 and 443 only, so port 22 is unreachable for every host.
 
 ## Usage
 
@@ -227,8 +231,18 @@ Makes the GitHub CLI work against the REST and GraphQL API.
     CSB_PROFILES="gh" claude-seatbelt
 
 `gh` keeps its own token in the macOS keyring, which the sandbox denies, so the
-token has to come in through `GH_TOKEN`. **Give that token read-only scope.** It
-is readable inside the sandbox — `gh auth token`, `env`, anything Claude can run.
+token has to come in through `GH_TOKEN`. It is readable inside the sandbox — `gh
+auth token`, `env`, anything Claude can run — so hand over as little as it can
+do damage with: a **fine-grained personal access token**, scoped to the
+repositories you want reachable, with `Contents: Read-only`.
+
+This is especially important when this profile is combined with [git-writable](#git-writable).
+Pushing is denied by the domain allowlist, but `api.github.com` stays open, and
+`POST /repos/:owner/:repo/git/refs` with a write-capable token is a push by another
+name — one that never runs `git push`. The token's scope is the only thing in front
+of it.
+
+`403` is the answer you want.
 
 What the profile opens:
 
@@ -238,6 +252,60 @@ What the profile opens:
 | `~/.config/gh` | `config.yml` and `hosts.yml`, which `gh` refuses to start without. Neither holds the token. |
 | `GH_TOKEN` | Required. The run is refused if it is unset or empty. |
 | `com.apple.trustd.agent` | `gh` is a Go binary, and Go on macOS verifies TLS through the Security framework rather than a CA bundle, so without this every request fails with `x509: OSStatus -26276`. srt warns that trustd is an exfiltration path in its own right — one that does not go through the proxy, and so is not bounded by the domain allowlist. |
+
+### git-writable
+
+Opens `.git` for writing, so `git add`, `git commit`, `git branch`, `git stash`
+and `git rebase` work in the workspace:
+
+    CSB_PROFILES="git-writable" claude-seatbelt
+
+The base policy's `**/.git` is be dropped. Instead, the profile puts back the names
+that matter, rather than the regions holding them, so that the index, objects and
+refs beside them stay writable:
+
+| Still denied | Why |
+| --- | --- |
+| `.git/hooks`, `.git/config` | srt's own mandatory denies, which no profile reaches past. A hook planted here runs on the host the next time git is invoked there. |
+| `**/.git/modules/**/hooks`, `**/.git/modules/**/config` | A submodule's gitdir carries its own copy of both, at a path srt's two patterns do not cover. |
+| `**/.git/worktrees/**/hooks` | A linked worktree's gitdir. Git reads hooks from the common directory rather than from here, so this is denied on principle rather than against a known path. |
+| `**/.git/config.worktree`, and the same under `modules` and `worktrees` | Written by `git config --worktree`, and not matched by srt's `**/.git/config`. |
+
+Committing to a submodule and `git worktree add` both keep working. One thing
+does not: adding a worktree of a repository that *has* submodules, because the
+checkout has to write `.gitmodules`, which is on srt's mandatory deny list.
+
+#### How push is denied
+
+Not by anything this profile does, but by the network policy it leaves alone:
+
+- Over HTTPS, `git push` needs `github.com:443`. No forge host is in the built-in
+  list, and the profile adds none, so srt's proxy refuses the connection.
+- Over SSH it needs `github.com:22`. Every allowlist entry is emitted on ports 80
+  and 443 only, so port 22 is unreachable for *any* host, allowlisted or not.
+  `~/.ssh` is denied for reading anyway.
+- The [gh](#gh) profile opens `api.github.com`, which serves no git endpoint.
+  Combining the two does not give `git push` a route.
+
+Filesystem and network are separate layers, and this profile only touches the
+first one. Three consequences to accept before selecting it:
+
+- **`fetch`, `pull` and `clone` are denied too**, for the same reason `push` is.
+  This is local git only. Move branches in and out from outside the sandbox.
+- **History is rewritable.** `commit --amend`, `reset --hard`, `rebase` and `gc`
+  all work now, so unpushed work is destroyable. Denying push bounds that to your
+  machine rather than your repository.
+- **A gitdir does not have to be called `.git`.** Every hook deny above is by
+  path, and a `.git` *file* holding `gitdir: ../elsewhere` points git at a
+  directory no pattern covers, hooks and all. Writing that file is denied by the
+  base policy and allowed by this profile, so the denies above stop git from
+  planting a hook where git itself would put one — they are not a boundary
+  against something that means it. What bounds that case is the rest of the
+  policy: the workspace is the only writable place, and the network is shut.
+
+Putting a forge host in `CSB_EXTRA_DOMAINS` undoes all of this at once. From
+there only credentials stand between Claude and the remote, which is what the
+token scope under [gh](#gh) is about.
 
 ### node
 
@@ -318,6 +386,6 @@ the sandboxed process failing to reach it is.
 | `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
-| `tests/profiles.test.ts` | what selecting `gh` or `node` adds, and what it still does not — each probe paired with the same one unselected |
+| `tests/profiles.test.ts` | what selecting `gh`, `git-writable` or `node` adds, and what it still does not — each probe paired with the same one unselected, and `git-writable` paired with `gh` |
 
 Note that some tests are skipped when run under GitHub actions due to environment restrictions.
