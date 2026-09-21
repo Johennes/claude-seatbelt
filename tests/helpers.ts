@@ -9,10 +9,15 @@ if (!fs.existsSync(entryPoint)) {
   throw new Error(`${entryPoint} is missing — run \`pnpm build\` first`);
 }
 
-// Create a temporary folder inside the repo root for the workspace. This must sit
-// outside of $TMPDIR, /private/tmp and /private/var/tmp. The policy opens those up
-// wholesale which would interfere with our tests.
-export const testTmp = fs.mkdtempSync(path.join(repoRoot, ".test-tmp."));
+// Everything a test writes goes under one gitignored directory in the repo root.
+// The repo root, rather than a system temp directory: the workspace has to sit
+// outside $TMPDIR, /private/tmp and /private/var/tmp, which the policy opens up
+// wholesale and which would interfere with what these tests are measuring.
+const testEnv = path.join(repoRoot, ".testenv");
+fs.mkdirSync(testEnv, { recursive: true });
+
+// One directory per test process so that tests can run in parallel.
+export const testTmp = fs.mkdtempSync(path.join(testEnv, "run."));
 process.on("exit", () => {
   fs.rmSync(testTmp, { recursive: true, force: true });
 });
