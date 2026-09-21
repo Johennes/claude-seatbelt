@@ -1,3 +1,6 @@
+[![Lint](https://github.com/Johennes/claude-seatbelt/actions/workflows/lint.yml/badge.svg)](https://github.com/Johennes/claude-seatbelt/actions/workflows/lint.yml)
+[![Tests](https://github.com/Johennes/claude-seatbelt/actions/workflows/test.yml/badge.svg)](https://github.com/Johennes/claude-seatbelt/actions/workflows/test.yml)
+
 # claude-seatbelt
 
 Run `claude` on the host under [Anthropic's sandbox-runtime][srt] with settings
