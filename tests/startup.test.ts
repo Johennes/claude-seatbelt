@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
-import { makeDir, sandboxRun } from "./helpers.ts";
+import { makeDir, sandboxRun, writeFile } from "./helpers.ts";
 
 const SENTINEL = "SENTINEL_RAN";
 const script = `echo ${SENTINEL}`;
@@ -100,5 +101,31 @@ describe("awkward characters in CSB_EXTRA_READ and CSB_EXTRA_WRITE", () => {
       CSB_EXTRA_WRITE: makeDir("back\\slashdir"),
     });
     assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+  });
+});
+
+// npx is npm, and npm reads the manifest of whatever directory it starts in.
+// A workspace is entitled to demand a particular package manager of its own
+// contributors, and that is no statement about the tool sandboxing it.
+describe("a workspace that demands another package manager", () => {
+  it("still runs", () => {
+    const cwd = makeDir("devengines-ws");
+    writeFile(
+      path.join(cwd, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "demands-pnpm",
+          devEngines: { packageManager: { name: "pnpm", version: "11.23.0", onFail: "download" } },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const sandbox = run("example.com", cwd);
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+    assert.ok(
+      !sandbox.printed("EBADDEVENGINES"),
+      `expected npm not to apply the workspace manifest to itself, got:\n${sandbox.output}`,
+    );
   });
 });

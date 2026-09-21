@@ -150,6 +150,10 @@ function main(): never {
     npx,
     [
       "--yes",
+      // Use the temporary running directory as prefix so that npm doesn't infer
+      // settings from the workspace for npx.
+      "--prefix",
+      rundir,
       `@anthropic-ai/sandbox-runtime@${config.srtVersion}`,
       "--settings",
       settingsPath,
