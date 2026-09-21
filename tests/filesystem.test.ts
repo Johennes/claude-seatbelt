@@ -16,6 +16,13 @@ writeFile(path.join(workspace, ".git", "config"), "tracked\n");
 writeFile(path.join(workspace, "sub", ".keep"), "");
 writeFile(path.join(outside, "secret.txt"), "sibling secret\n");
 
+// The probes below reach for these with `touch`, which cannot create a file
+// whose parent is missing. Without them in place a denial could as easily be
+// ENOENT as EPERM, and the assertion would prove nothing.
+writeFile(path.join(workspace, "node_modules", ".bin", ".keep"), "");
+writeFile(path.join(workspace, "node_modules", "pkg", ".keep"), "");
+writeFile(path.join(workspace, "sub", "node_modules", ".keep"), "");
+
 describe("the workspace", () => {
   let sandbox: SandboxResult;
 
@@ -25,23 +32,23 @@ describe("the workspace", () => {
       cwd: workspace,
       script: [
         `p read_workspace         'cat existing.txt'`,
-        `p write_workspace        'echo x > created.txt'`,
-        `p write_workspace_subdir 'echo x > sub/created.txt'`,
+        `p write_workspace        'touch created.txt'`,
+        `p write_workspace_subdir 'touch sub/created.txt'`,
         `p create_workspace_dir   'mkdir fresh_dir'`,
         `p delete_workspace_file  'rm -f existing.txt'`,
 
         `p read_sibling           'cat ${outside}/secret.txt'`,
-        `p write_sibling          'echo x > ${outside}/created.txt'`,
+        `p write_sibling          'touch ${outside}/created.txt'`,
         `p list_sibling           'ls ${outside}'`,
         `p read_repo_readme       'cat ${repoRoot}/README.md'`,
 
         `p read_git_config        'cat .git/config'`,
-        `p write_git_config       'echo x >> .git/config'`,
-        `p write_git_new_file     'echo x > .git/hooks_payload'`,
+        `p write_git_config       'touch .git/config'`,
+        `p write_git_new_file     'touch .git/hooks_payload'`,
 
         `p read_etc_hosts         'cat /etc/hosts'`,
         `p read_system_binary     'head -c 1 /usr/bin/curl'`,
-        `p write_usr_local        'echo x > /usr/local/injected'`,
+        `p write_usr_local        'touch /usr/local/injected'`,
       ].join("\n"),
     });
   });
@@ -124,14 +131,14 @@ describe("the home directory", () => {
         `p read_aws           'cat $HOME/.aws/credentials'`,
         `p read_claude_config 'cat $HOME/.claude.json'`,
         `p read_gitconfig     'cat $HOME/.gitconfig'`,
-        `p write_gitconfig    'echo "# claude-seatbelt probe" >> $HOME/.gitconfig'`,
-        `p write_claude_hook  'echo x > $HOME/.claude/hooks/injected.sh'`,
-        `p write_claude_cmd   'echo x > $HOME/.claude/commands/injected.md'`,
-        `p write_claude_agent 'echo x > $HOME/.claude/agents/injected.md'`,
-        `p write_claude_stgs  'echo x > $HOME/.claude/settings.json'`,
+        `p write_gitconfig    'touch $HOME/.gitconfig'`,
+        `p write_claude_hook  'touch $HOME/.claude/hooks/injected.sh'`,
+        `p write_claude_cmd   'touch $HOME/.claude/commands/injected.md'`,
+        `p write_claude_agent 'touch $HOME/.claude/agents/injected.md'`,
+        `p write_claude_stgs  'touch $HOME/.claude/settings.json'`,
         `p list_keychains     'ls $HOME/Library/Keychains'`,
         `p read_login_kc      'head -c 16 $HOME/Library/Keychains/login.keychain-db'`,
-        `p write_keychain_dir 'echo x > $HOME/Library/Keychains/injected'`,
+        `p write_keychain_dir 'touch $HOME/Library/Keychains/injected'`,
         `p list_sys_keychains 'ls /Library/Keychains'`,
         `p read_sys_keychain  'head -c 16 /Library/Keychains/System.keychain'`,
         `p read_oauth_secret  'security find-generic-password -a "$USER" -w -s "Claude Code-credentials"'`,
@@ -226,7 +233,7 @@ describe("CSB_EXTRA_READ", () => {
       env: { CSB_EXTRA_READ: outside },
       script: [
         `p read_extra  'cat ${outside}/secret.txt'`,
-        `p write_extra 'echo x > ${outside}/created.txt'`,
+        `p write_extra 'touch ${outside}/created.txt'`,
       ].join("\n"),
     });
   });
@@ -248,21 +255,23 @@ describe("gitignored paths inside the workspace", () => {
       extraDomains: "example.com",
       cwd: workspace,
       script: [
-        `p write_node_modules     'mkdir -p node_modules && echo x > node_modules/injected.js'`,
-        `p write_node_modules_bin 'mkdir -p node_modules/.bin && echo x > node_modules/.bin/pnpm'`,
-        `p write_node_modules_pkg 'mkdir -p node_modules/pkg && echo x > node_modules/pkg/index.js'`,
+        // The directory itself, which "**/node_modules" covers separately from
+        // its contents. It exists already, so this is the utimes path.
+        `p write_node_modules     'touch node_modules'`,
+        `p write_node_modules_bin 'touch node_modules/.bin/pnpm'`,
+        `p write_node_modules_pkg 'touch node_modules/pkg/index.js'`,
         // A nested workspace has its own, which is why the patterns are "**".
-        `p write_nested_modules   'mkdir -p sub/node_modules && echo x > sub/node_modules/injected.js'`,
+        `p write_nested_modules   'touch sub/node_modules/injected.js'`,
 
-        `p write_dotenv           'echo x > .env'`,
-        `p write_dotenv_local     'echo x > .env.local'`,
-        `p write_dotenv_prod      'echo x > .env.production.local'`,
-        `p write_nested_dotenv    'echo x > sub/.env'`,
+        `p write_dotenv           'touch .env'`,
+        `p write_dotenv_local     'touch .env.local'`,
+        `p write_dotenv_prod      'touch .env.production.local'`,
+        `p write_nested_dotenv    'touch sub/.env'`,
 
         // Tracked, so a change to it lands in the diff. Not denied.
-        `p write_dotenv_example   'echo x > .env.example'`,
+        `p write_dotenv_example   'touch .env.example'`,
         // Neither is anything else in the workspace.
-        `p write_ordinary_file    'echo x > ordinary.ts'`,
+        `p write_ordinary_file    'touch ordinary.ts'`,
       ].join("\n"),
     });
   });

@@ -123,7 +123,7 @@ describe("the gh profile, selected", () => {
       env: { ...token, CSB_PROFILES: "gh" },
       script: [
         `p read_gh_config  'ls "${ghConfig}"'`,
-        `p write_gh_config 'echo x > "${ghConfig}/injected"'`,
+        `p write_gh_config 'touch "${ghConfig}/injected"'`,
         `p reach_api       'curl -sS -o /dev/null --max-time 15 https://api.github.com'`,
         // The host the OAuth device flow lives on. Not opened, so no new token
         // can be minted from inside.
