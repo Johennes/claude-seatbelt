@@ -33,6 +33,10 @@
       // bin/ — node, npm, npx, and the corepack shims for pnpm and yarn — on
       // PATH once nvm has been sourced from a shell rc file.
       "~/.nvm",
+      // nvm again, where it goes when XDG_CONFIG_HOME is set.
+      "~/.config/nvm",
+      // nodenv, whose shims/ dispatch to versions/<version>.
+      "~/.nodenv",
       // A standalone pnpm — the installer script rather than corepack — on the
       // XDG layout. This is PNPM_HOME, holding the pnpm binary and the global
       // content-addressable store beneath it.
@@ -40,6 +44,10 @@
       // The same standalone pnpm at its macOS default, which is where `pnpm
       // store path` reports on this machine.
       "~/Library/pnpm",
+      // The two conventional homes for an npm prefix moved out of /usr/local,
+      // which is where `npm install -g pnpm` then puts it.
+      "~/.npm-global",
+      "~/.npm-packages",
       // Corepack's download cache, which holds the pnpm and yarn it dispatches
       // to.
       "~/.cache/node"

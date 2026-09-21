@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Figure out where the binary is.
@@ -129,8 +130,35 @@ export function makeDir(...parts: string[]): string {
   return dir;
 }
 
+/** A path in this user's home. */
+export function inHome(...parts: string[]): string {
+  return path.join(os.homedir(), ...parts);
+}
+
 /** Write a file to the given path. */
 export function writeFile(file: string, contents: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
+}
+
+/**
+ * A skip reason when a path the test depends on is not on this machine, and
+ * undefined when it is.
+ */
+export function skipUnlessPresent(...targets: string[]): string | undefined {
+  const absent = targets.filter((target) => !fs.existsSync(target));
+  return absent.length === 0 ? undefined : warnSkip(`not on this machine: ${absent.join(", ")}`);
+}
+
+/** Warn about skipped tests. */
+export function warnSkip(reason: string): string {
+  if (process.env["GITHUB_ACTIONS"] === "true") {
+    // Workflow commands are read off stdout, and the message has to survive the
+    // parser: percent first, or it would eat the escapes that follow.
+    const escaped = reason.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+    process.stdout.write(`::warning title=Test skipped::${escaped}\n`);
+  } else {
+    process.stderr.write(`⚠ test skipped: ${reason}\n`);
+  }
+  return reason;
 }

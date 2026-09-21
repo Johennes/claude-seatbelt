@@ -5,11 +5,14 @@ import path from "node:path";
 import { before, describe, it } from "node:test";
 
 import {
+  inHome,
   makeDir,
   repoRoot,
   type SandboxResult,
   sandboxProbe,
   sandboxRun,
+  skipUnlessPresent,
+  warnSkip,
   testTmp,
   writeFile,
 } from "./helpers.ts";
@@ -21,19 +24,57 @@ const workspace = makeDir("profiles-ws");
 // authenticates against GitHub — CSB_CLAUDE is /bin/sh.
 const token = { GH_TOKEN: "test-token" };
 
+const ghConfigDir = inHome(".config", "gh");
+const corepackCache = inHome(".cache", "node");
+
 const run = (env: Record<string, string>, script = `echo ${SENTINEL}`) =>
   sandboxRun({ extraDomains: "", cwd: workspace, script, env });
 
-/** Whether this machine's `pnpm` is one the base policy denies in the first place. */
-function pnpmIsUnderHome(): boolean {
+/** The real path of the first `pnpm` on PATH, or undefined when there is none. */
+function resolvePnpm(): string | undefined {
   for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
     try {
-      return fs.realpathSync(path.join(dir, "pnpm")).startsWith(`${os.homedir()}${path.sep}`);
+      return fs.realpathSync(path.join(dir, "pnpm"));
     } catch {
       // Not this directory, keep looking.
     }
   }
-  return false;
+  return undefined;
+}
+
+/** Whether this machine's `pnpm` is one the base policy denies in the first place. */
+function skipUnlessPnpmIsUnderHome(): string | undefined {
+  const pnpm = resolvePnpm();
+  if (pnpm?.startsWith(`${os.homedir()}${path.sep}`)) return undefined;
+  return warnSkip(`pnpm is not under $HOME on this machine (${pnpm ?? "none on PATH"})`);
+}
+
+/**
+ * The pnpm-bearing roots of `node` profile.
+ */
+const NODE_PROFILE_ROOTS = [
+  ".nvm",
+  ".config/nvm",
+  ".nodenv",
+  ".local/share/pnpm",
+  "Library/pnpm",
+  ".npm-global",
+  ".npm-packages",
+];
+
+/**
+ * A skip reason when the `node` profile does not cover this machine's `pnpm`,
+ * and undefined when it does.
+ */
+function skipUnlessProfileReachesPnpm(): string | undefined {
+  const roots = NODE_PROFILE_ROOTS.map((suffix) => inHome(suffix));
+  const pnpm = resolvePnpm();
+  if (pnpm !== undefined && roots.some((root) => pnpm.startsWith(`${root}${path.sep}`))) {
+    return undefined;
+  }
+  return warnSkip(
+    `the node profile does not reach this machine's pnpm (${pnpm ?? "none on PATH"})`,
+  );
 }
 
 describe("selecting profiles", () => {
@@ -114,7 +155,7 @@ describe("requiredEnv", () => {
 
 describe("the gh profile, selected", () => {
   let sandbox: SandboxResult;
-  const ghConfig = path.join(os.homedir(), ".config", "gh");
+  const ghConfig = inHome(".config", "gh");
 
   before(() => {
     sandbox = sandboxProbe({
@@ -141,12 +182,12 @@ describe("the gh profile, selected", () => {
     assert.equal(sandbox.status, 0);
   });
 
-  it("the gh config directory is readable", () => {
+  it("the gh config directory is readable", { skip: skipUnlessPresent(ghConfigDir) }, () => {
     assert.equal(sandbox.probe("read_gh_config"), "allowed");
   });
 
   // extraRead opens a path to read, not to write, exactly as CSB_EXTRA_READ does.
-  it("the gh config directory is not writable", () => {
+  it("the gh config directory is not writable", { skip: skipUnlessPresent(ghConfigDir) }, () => {
     assert.equal(sandbox.probe("write_gh_config"), "denied");
   });
 
@@ -173,7 +214,7 @@ describe("the gh profile, selected", () => {
 
 describe("the gh profile, not selected", () => {
   let sandbox: SandboxResult;
-  const ghConfig = path.join(os.homedir(), ".config", "gh");
+  const ghConfig = inHome(".config", "gh");
 
   before(() => {
     sandbox = sandboxProbe({
@@ -186,7 +227,7 @@ describe("the gh profile, not selected", () => {
     });
   });
 
-  it("the gh config directory is not readable", () => {
+  it("the gh config directory is not readable", { skip: skipUnlessPresent(ghConfigDir) }, () => {
     assert.equal(sandbox.probe("read_gh_config"), "denied");
   });
 
@@ -195,7 +236,7 @@ describe("the gh profile, not selected", () => {
   });
 });
 
-describe("the node profile", () => {
+describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
   let sandbox: SandboxResult;
   const messy = path.join(testTmp, "messy.ts");
   const ugly = `export  const   x =   {a:1,b:2}\n`;
@@ -208,8 +249,8 @@ describe("the node profile", () => {
       env: { CSB_PROFILES: "node" },
       script: [
         `p pnpm_resolves 'command -v pnpm'`,
-        `p read_node_cache  'ls "${path.join(os.homedir(), ".cache", "node")}"'`,
-        `p write_node_cache 'touch "${path.join(os.homedir(), ".cache", "node", "probe")}"'`,
+        `p read_node_cache  'ls "${inHome(".cache", "node")}"'`,
+        `p write_node_cache 'touch "${inHome(".cache", "node", "probe")}"'`,
         `p pnpm_lint     'pnpm lint'`,
         `p pnpm_format   'pnpm format:check'`,
         // `pnpm format` differs from `format:check` only in writing, so the
@@ -228,13 +269,13 @@ describe("the node profile", () => {
     assert.equal(sandbox.probe("pnpm_resolves"), "allowed");
   });
 
-  it("the corepack cache is readable", () => {
+  it("the corepack cache is readable", { skip: skipUnlessPresent(corepackCache) }, () => {
     assert.equal(sandbox.probe("read_node_cache"), "allowed");
   });
 
   // Reading is enough: a version already fetched outside the sandbox runs from
   // here, and fetching a new one would need the network the profile never opens.
-  it("the corepack cache is not writable", () => {
+  it("the corepack cache is not writable", { skip: skipUnlessPresent(corepackCache) }, () => {
     assert.equal(sandbox.probe("write_node_cache"), "denied");
   });
 
@@ -253,7 +294,7 @@ describe("the node profile", () => {
 });
 
 describe("the node profile, not selected", () => {
-  it("pnpm is out of reach without the profile", { skip: !pnpmIsUnderHome() }, () => {
+  it("pnpm is out of reach without the profile", { skip: skipUnlessPnpmIsUnderHome() }, () => {
     const sandbox = sandboxProbe({
       extraDomains: "",
       cwd: repoRoot,
