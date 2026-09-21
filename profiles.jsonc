@@ -75,13 +75,16 @@
       "~/.cache/node"
     ],
     "extraWrite": [],
-    // Vite transpiles its own config into node_modules/.vite-temp before it can
-    // read it, and fails with EPERM otherwise. Since we cannot deny writes to
-    // anything except node_modules/.vite-temp with srt, we need to open up write
-    // access to node_modules entirely.
-    //
-    // Upstream fix: https://github.com/vitejs/vite/pull/23544
+    "allowMachLookup": [],
+    "requiredEnv": []
+  },
+  "node-modules-writable": {
+    "description": "node_modules, at any depth, for tools that transpile into it. Select it beside 'node'.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
     "denyWriteOverrides": {
+      // Open up node_modules entirely.
       "**/node_modules": []
     },
     "allowMachLookup": [],

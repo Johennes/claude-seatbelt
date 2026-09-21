@@ -330,11 +330,20 @@ The profile opens the version manager roots for **reading**:
   covered: it needs `registry.npmjs.org` in `CSB_EXTRA_DOMAINS` and a writable
   store. Run installs outside the sandbox and let Claude use what is already in
   `node_modules`.
-- **Write access to `node_modules`.** Vvite transpiles its own config into
-  `node_modules/.vite-temp` before it can read it, and fails with `EPERM`
-  otherwise. Since we cannot deny writes to anything except `node_modules/.vite-temp`
-  with srt, we need to open up write access to `node_modules` entirely. This
-  can be fixed once https://github.com/vitejs/vite/pull/23544 lands.
+- **`node_modules` stays read-only.** A toolchain that writes into it needs
+  [node-modules-writable](#node-modules-writable) selected as well.
+
+### node-modules-writable
+
+Drops the base policy's `**/node_modules` deny, at any depth:
+
+    CSB_PROFILES="node node-modules-writable" claude-seatbelt
+
+This is required when using Vite which transpiles its own config into
+`node_modules/.vite-temp` before it can read it, and fails with `EPERM` otherwise.
+srt cannot deny a path inside a region it has opened, so nothing narrower than the
+whole of `node_modules` is expressible and the deny has to go entirely. A fix is
+pending upstream: https://github.com/vitejs/vite/pull/23544
 
 ## Running several at once
 
@@ -386,6 +395,6 @@ the sandboxed process failing to reach it is.
 | `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
-| `tests/profiles.test.ts` | what selecting `gh`, `git-writable` or `node` adds, and what it still does not — each probe paired with the same one unselected, and `git-writable` paired with `gh` |
+| `tests/profiles.test.ts` | what selecting `gh`, `git-writable`, `node` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
 
 Note that some tests are skipped when run under GitHub actions due to environment restrictions.

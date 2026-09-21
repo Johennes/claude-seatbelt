@@ -484,6 +484,8 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
       env: { CSB_PROFILES: "node" },
       script: [
         `p pnpm_resolves 'command -v pnpm'`,
+        // The base deny, which this profile no longer lifts. That is
+        // node-modules-writable's job, and it is not selected here.
         `p write_vite_temp 'touch node_modules/.vite-temp/probe.mjs'`,
         `p write_nm_pkg    'touch node_modules/probe.js'`,
         `p write_nm_bin    'touch node_modules/.bin/probe'`,
@@ -507,16 +509,16 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
     assert.equal(sandbox.probe("pnpm_resolves"), "allowed");
   });
 
-  it("a build tool can write its scratch directory under node_modules", () => {
-    assert.equal(sandbox.probe("write_vite_temp"), "allowed");
+  it("a build tool's scratch directory under node_modules stays closed", () => {
+    assert.equal(sandbox.probe("write_vite_temp"), "denied");
   });
 
-  it("package code under node_modules becomes writable too", () => {
-    assert.equal(sandbox.probe("write_nm_pkg"), "allowed");
+  it("package code under node_modules stays closed", () => {
+    assert.equal(sandbox.probe("write_nm_pkg"), "denied");
   });
 
-  it("node_modules/.bin becomes writable too", () => {
-    assert.equal(sandbox.probe("write_nm_bin"), "allowed");
+  it("node_modules/.bin stays closed", () => {
+    assert.equal(sandbox.probe("write_nm_bin"), "denied");
   });
 
   it("the corepack cache is readable", { skip: skipUnlessPresent(corepackCache) }, () => {
@@ -540,6 +542,56 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
   it("the formatter can rewrite a file in the workspace", () => {
     assert.equal(sandbox.probe("oxfmt_writes"), "allowed");
     assert.notEqual(fs.readFileSync(messy, "utf8"), ugly);
+  });
+});
+
+// Selected beside `node`, which is how it is meant to be used: the override is
+// no use on its own to a toolchain the base policy cannot reach.
+describe("the node-modules-writable profile", () => {
+  let sandbox: SandboxResult;
+
+  before(() => {
+    fs.mkdirSync(path.join(repoRoot, "node_modules", ".vite-temp"), { recursive: true });
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: repoRoot,
+      env: { CSB_PROFILES: "node node-modules-writable" },
+      script: [
+        `p write_vite_temp 'touch node_modules/.vite-temp/probe.mjs'`,
+        // srt cannot deny a path inside a region it has opened, so the whole of
+        // node_modules comes with it. Asserted rather than hoped for, because
+        // these two are what the base deny existed to close.
+        `p write_nm_pkg 'touch node_modules/probe.js'`,
+        `p write_nm_bin 'touch node_modules/.bin/probe'`,
+        // What it must not have taken with it.
+        `p write_git    'touch .git/probe'`,
+        `p write_dotenv 'touch .env'`,
+      ].join("\n"),
+    });
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("a build tool can write its scratch directory under node_modules", () => {
+    assert.equal(sandbox.probe("write_vite_temp"), "allowed");
+  });
+
+  it("package code under node_modules becomes writable too", () => {
+    assert.equal(sandbox.probe("write_nm_pkg"), "allowed");
+  });
+
+  it("node_modules/.bin becomes writable too", () => {
+    assert.equal(sandbox.probe("write_nm_bin"), "allowed");
+  });
+
+  it("git metadata is unaffected", () => {
+    assert.equal(sandbox.probe("write_git"), "denied");
+  });
+
+  it("environment files are unaffected", () => {
+    assert.equal(sandbox.probe("write_dotenv"), "denied");
   });
 });
 
