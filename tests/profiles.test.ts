@@ -243,12 +243,19 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
 
   before(() => {
     writeFile(messy, ugly);
+    // The probes below use `touch`, which cannot create a file whose parent is
+    // missing — without this a denial could as easily be ENOENT as EPERM. This
+    // is the directory vite makes for itself in a project that uses it.
+    fs.mkdirSync(path.join(repoRoot, "node_modules", ".vite-temp"), { recursive: true });
     sandbox = sandboxProbe({
       extraDomains: "",
       cwd: repoRoot,
       env: { CSB_PROFILES: "node" },
       script: [
         `p pnpm_resolves 'command -v pnpm'`,
+        `p write_vite_temp 'touch node_modules/.vite-temp/probe.mjs'`,
+        `p write_nm_pkg    'touch node_modules/probe.js'`,
+        `p write_nm_bin    'touch node_modules/.bin/probe'`,
         `p read_node_cache  'ls "${inHome(".cache", "node")}"'`,
         `p write_node_cache 'touch "${inHome(".cache", "node", "probe")}"'`,
         `p pnpm_lint     'pnpm lint'`,
@@ -267,6 +274,18 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
 
   it("pnpm is on PATH", () => {
     assert.equal(sandbox.probe("pnpm_resolves"), "allowed");
+  });
+
+  it("a build tool can write its scratch directory under node_modules", () => {
+    assert.equal(sandbox.probe("write_vite_temp"), "allowed");
+  });
+
+  it("package code under node_modules becomes writable too", () => {
+    assert.equal(sandbox.probe("write_nm_pkg"), "allowed");
+  });
+
+  it("node_modules/.bin becomes writable too", () => {
+    assert.equal(sandbox.probe("write_nm_bin"), "allowed");
   });
 
   it("the corepack cache is readable", { skip: skipUnlessPresent(corepackCache) }, () => {

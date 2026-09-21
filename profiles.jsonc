@@ -12,10 +12,6 @@
       "~/.config/gh"
     ],
     "extraWrite": [],
-    "requiredEnv": [
-      // The GitHub token that gh will use.
-      "GH_TOKEN"
-    ],
     "allowMachLookup": [
       // gh is a Go binary, and Go on macOS verifies TLS through the Security
       // framework rather than a CA bundle, so without this every request fails
@@ -23,6 +19,10 @@
       // path in its own right — one that does not go through the proxy, and so
       // is not bounded by the domain allowlist.
       "com.apple.trustd.agent"
+    ],
+    "requiredEnv": [
+      // The GitHub token that gh will use.
+      "GH_TOKEN"
     ]
   },
   "node": {
@@ -53,7 +53,17 @@
       "~/.cache/node"
     ],
     "extraWrite": [],
-    "requiredEnv": [],
-    "allowMachLookup": []
+    // Vite transpiles its own config into node_modules/.vite-temp before it can
+    // read it, and fails with EPERM otherwise. Since we cannot deny writes to
+    // anything except node_modules/.vite-temp with srt, we need to open up write
+    // access to node_modules entirely.
+    //
+    // Upstream fix: https://github.com/vitejs/vite/pull/23544
+    "denyWriteOverrides": {
+      "**/node_modules": [],
+      "**/node_modules/**": []
+    },
+    "allowMachLookup": [],
+    "requiredEnv": []
   }
 }

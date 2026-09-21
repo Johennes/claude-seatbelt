@@ -134,6 +134,7 @@ function main(): never {
     allowedDomains,
     extraRead: [...config.extraRead, ...profiles.extraRead],
     extraWrite: [...config.extraWrite, ...profiles.extraWrite],
+    denyWriteOverrides: profiles.denyWriteOverrides,
     allowMachLookup: profiles.allowMachLookup,
   });
 
@@ -218,10 +219,12 @@ interface Profile {
   extraRead?: string[];
   /** Appended to CSB_EXTRA_WRITE. */
   extraWrite?: string[];
-  /** Environment variables the profile needs, by name. */
-  requiredEnv?: string[];
+  /** denyWrite entries to replace in the base policy. An empty list drops the entry outright. */
+  denyWriteOverrides?: Record<string, string[]>;
   /** XPC/Mach services to open, srt's `network.allowMachLookup`. */
   allowMachLookup?: string[];
+  /** Environment variables the profile needs, by name. */
+  requiredEnv?: string[];
 }
 
 /** The list-valued keys of a profile, all optional and all additive. */
@@ -229,8 +232,8 @@ const PROFILE_LISTS = [
   "extraDomains",
   "extraRead",
   "extraWrite",
-  "requiredEnv",
   "allowMachLookup",
+  "requiredEnv",
 ] as const;
 
 /** What CSB_PROFILES adds up to, once the named profiles are applied in order. */
@@ -238,6 +241,7 @@ interface ProfileAdditions {
   extraDomains: string[];
   extraRead: string[];
   extraWrite: string[];
+  denyWriteOverrides: Record<string, string[]>;
   allowMachLookup: string[];
 }
 
@@ -253,6 +257,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     extraDomains: [],
     extraRead: [],
     extraWrite: [],
+    denyWriteOverrides: {},
     allowMachLookup: [],
   };
 
@@ -273,6 +278,9 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     additions.extraDomains.push(...(profile.extraDomains ?? []));
     additions.extraRead.push(...(profile.extraRead ?? []).map(expandHome));
     additions.extraWrite.push(...(profile.extraWrite ?? []).map(expandHome));
+
+    // The later profile wins on a key both name.
+    Object.assign(additions.denyWriteOverrides, profile.denyWriteOverrides ?? {});
     additions.allowMachLookup.push(...(profile.allowMachLookup ?? []));
 
     for (const variable of profile.requiredEnv ?? []) {
@@ -322,6 +330,13 @@ function readProfiles(file: string): Map<string, Profile> {
       if (key === "description") {
         if (typeof entry !== "string") rejections.push(`${where}: 'description' must be a string`);
         else profile.description = entry;
+        continue;
+      }
+      if (key === "denyWriteOverrides") {
+        const replacements = parseDenyWriteOverrides(entry, where, rejections);
+        if (replacements) {
+          profile.denyWriteOverrides = replacements;
+        }
         continue;
       }
       if (!(PROFILE_LISTS as readonly string[]).includes(key)) {
@@ -421,6 +436,52 @@ function stripJsonComments(source: string): string {
   }
 
   return result;
+}
+
+/**
+ * Validate a profile's denyWriteOverrides, or add to `rejections` and give nothing
+ * back. Whether the keys name denies that exist is settled later, against the
+ * list they are applied to.
+ */
+function parseDenyWriteOverrides(
+  entry: unknown,
+  where: string,
+  rejections: string[],
+): Record<string, string[]> | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    rejections.push(`${where}: 'denyWriteOverrides' must be an object`);
+    return undefined;
+  }
+  const result: Record<string, string[]> = {};
+  for (const [pattern, replacements] of Object.entries(entry)) {
+    if (
+      !Array.isArray(replacements) ||
+      replacements.some((item) => typeof item !== "string" || !item)
+    ) {
+      rejections.push(
+        `${where}: 'denyWriteOverrides' entry '${pattern}' must be an array of non-empty strings`,
+      );
+      continue;
+    }
+    result[pattern] = replacements as string[];
+  }
+  return result;
+}
+
+/**
+ * Put each replacment in place of the entry it names, keeping the rest of the list
+ * as it stands. An empty replacement drops the entry and denies nothing in its
+ * stead. A key that matches nothing stops the run.
+ */
+function replaceDenyWrite(replacements: Record<string, string[]>, denyWrite: string[]): string[] {
+  const unmatched = Object.keys(replacements).filter((pattern) => !denyWrite.includes(pattern));
+  if (unmatched.length > 0) {
+    for (const pattern of unmatched) {
+      note(`denyWriteOverrides names '${pattern}', which is not a denyWrite entry`);
+    }
+    die(`refusing to run: ${unmatched.length} denyWriteOverrides entry/entries match nothing`);
+  }
+  return denyWrite.flatMap((pattern) => replacements[pattern] ?? [pattern]);
 }
 
 /** Expand a leading "~/" the way srt would, so the two agree on what a path is. */
@@ -528,9 +589,18 @@ function buildSrtSettings(opts: {
   allowedDomains: string[];
   extraRead: string[];
   extraWrite: string[];
+  denyWriteOverrides: Record<string, string[]>;
   allowMachLookup: string[];
 }): SrtSettings {
-  const { workdir, tmpDir, allowedDomains, extraRead, extraWrite, allowMachLookup } = opts;
+  const {
+    workdir,
+    tmpDir,
+    allowedDomains,
+    extraRead,
+    extraWrite,
+    denyWriteOverrides,
+    allowMachLookup,
+  } = opts;
   const inHome = (...parts: string[]): string => path.join(homeDir, ...parts);
 
   return {
@@ -614,7 +684,7 @@ function buildSrtSettings(opts: {
       // those need no entry here. srt emits its denies after every allow, and the
       // last matching rule in a Seatbelt profile wins, so extraWrite cannot
       // reopen them either.
-      denyWrite: [
+      denyWrite: replaceDenyWrite(denyWriteOverrides, [
         // Git metadata, anywhere below a writable root. A hook planted here runs
         // on the host the next time git is invoked, and history is not Claude's
         // to rewrite behind the user's back. The directory and its contents are
@@ -641,7 +711,7 @@ function buildSrtSettings(opts: {
         "**/.env",
         "**/.env.local",
         "**/.env.*.local",
-      ],
+      ]),
     },
     network: {
       allowedDomains,

@@ -184,7 +184,7 @@ closed again where an opened region contains something dangerous.
 | `~/.claude/settings.json` | The host-side settings, which grant permissions and can name hooks. |
 | `~/.claude/hooks`, `~/.claude/hooks/**` | Hook scripts, which the host Claude runs outside the sandbox. |
 | `~/.claude/plugins`, `~/.claude/plugins/**` | Plugin code, which the host Claude loads and runs the same way. |
-| `**/node_modules`, `**/node_modules/**` | Installed packages, at any depth — a nested workspace has its own. `node_modules/.bin` is on `PATH` for every `pnpm run` you type on the host. |
+| `**/node_modules`, `**/node_modules/**` | Installed packages, at any depth — a nested workspace has its own. |
 | `**/.env`, `**/.env.local`, `**/.env.*.local` | Environment files, read by the host toolchain. |
 
 srt's own mandatory deny list already blocks writes to `.git/hooks`,
@@ -201,9 +201,11 @@ A profile is a named bundle of additions for one tool, selected with
 
     CSB_PROFILES="gh" claude-seatbelt
 
-Profiles only ever widen. A profile cannot close anything the base policy opens,
-cannot reach past srt's own mandatory denies, and its domains go through the same
-grammar `CSB_EXTRA_DOMAINS` does.
+A profile cannot close anything the base policy opens, cannot reach past srt's
+own mandatory denies, and its domains go through the same grammar
+`CSB_EXTRA_DOMAINS` does. It is otherwise additive, with one exception:
+`denyWriteOverrides` can replace base entries from `denyWrite`. This is sometimes
+required because srt gives `denyWrite` precedence over `allowWrite`.
 
 They live in one file, `profiles.jsonc` beside the package.
 
@@ -213,8 +215,9 @@ They live in one file, `profiles.jsonc` beside the package.
 | `extraDomains` | Appended to `CSB_EXTRA_DOMAINS`. |
 | `extraRead` | Appended to `CSB_EXTRA_READ`. Absolute, or under `~/`. |
 | `extraWrite` | Appended to `CSB_EXTRA_WRITE`. Absolute, or under `~/`. |
-| `requiredEnv` | Environment variables the tool needs, by name. They are inherited from the caller like everything else; naming them here turns a tool that misbehaves silently without its credential into a run that is refused. |
+| `denyWriteOverrides` | A map from a `denyWrite` entry to a replacement; an empty list drops it outright. This is sometimes required because `denyWrite` beats `allowWrite` in srt: a path this tool denies cannot be given back through `extraWrite` by anyone. A key that is not a current `denyWrite` entry is rejected. |
 | `allowMachLookup` | XPC/Mach services to open, srt's `network.allowMachLookup`. |
+| `requiredEnv` | Environment variables the tool needs, by name. They are inherited from the caller like everything else; naming them here turns a tool that misbehaves silently without its credential into a run that is refused. |
 
 ### gh
 
@@ -242,7 +245,7 @@ Enables running `pnpm` and `nvm` in the workspace, for instance:
 
     CSB_PROFILES="node" claude-seatbelt
 
-The profile opens the version manager roots for **reading**, and nothing else:
+The profile opens the version manager roots for **reading**:
 
 | | |
 | --- | --- |
@@ -259,6 +262,11 @@ The profile opens the version manager roots for **reading**, and nothing else:
   covered: it needs `registry.npmjs.org` in `CSB_EXTRA_DOMAINS` and a writable
   store. Run installs outside the sandbox and let Claude use what is already in
   `node_modules`.
+- **Write access to `node_modules`.** Vvite transpiles its own config into
+  `node_modules/.vite-temp` before it can read it, and fails with `EPERM`
+  otherwise. Since we cannot deny writes to anything except `node_modules/.vite-temp`
+  with srt, we need to open up write access to `node_modules` entirely. This
+  can be fixed once https://github.com/vitejs/vite/pull/23544 lands.
 
 ## Running several at once
 
