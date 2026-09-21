@@ -180,11 +180,11 @@ closed again where an opened region contains something dangerous.
 
 | Denied for writing | Explanation |
 | ------------------ | ----------- |
-| `**/.git`, `**/.git/**` | Git metadata, anywhere below a writable root. |
+| `**/.git` | Git metadata, anywhere below a writable root. |
 | `~/.claude/settings.json` | The host-side settings, which grant permissions and can name hooks. |
-| `~/.claude/hooks`, `~/.claude/hooks/**` | Hook scripts, which the host Claude runs outside the sandbox. |
-| `~/.claude/plugins`, `~/.claude/plugins/**` | Plugin code, which the host Claude loads and runs the same way. |
-| `**/node_modules`, `**/node_modules/**` | Installed packages, at any depth — a nested workspace has its own. |
+| `~/.claude/hooks` | Hook scripts, which the host Claude runs outside the sandbox. |
+| `~/.claude/plugins` | Plugin code, which the host Claude loads and runs the same way. |
+| `**/node_modules` | Installed packages, at any depth — a nested workspace has its own. |
 | `**/.env`, `**/.env.local`, `**/.env.*.local` | Environment files, read by the host toolchain. |
 
 srt's own mandatory deny list already blocks writes to `.git/hooks`,

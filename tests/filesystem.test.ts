@@ -295,8 +295,6 @@ describe("gitignored paths inside the workspace", () => {
       extraDomains: "example.com",
       cwd: workspace,
       script: [
-        // The directory itself, which "**/node_modules" covers separately from
-        // its contents. It exists already, so this is the utimes path.
         `p write_node_modules     'touch node_modules'`,
         `p write_node_modules_bin 'touch node_modules/.bin/pnpm'`,
         `p write_node_modules_pkg 'touch node_modules/pkg/index.js'`,

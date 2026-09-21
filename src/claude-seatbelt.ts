@@ -687,24 +687,19 @@ function buildSrtSettings(opts: {
       denyWrite: replaceDenyWrite(denyWriteOverrides, [
         // Git metadata, anywhere below a writable root. A hook planted here runs
         // on the host the next time git is invoked, and history is not Claude's
-        // to rewrite behind the user's back. The directory and its contents are
-        // separate patterns because one does not imply the other.
+        // to rewrite behind the user's back.
         "**/.git",
-        "**/.git/**",
         // The host-side settings, which grant permissions and can name hooks.
         inHome(".claude/settings.json"),
         // Hook scripts, which the host Claude runs outside the sandbox.
         inHome(".claude/hooks"),
-        inHome(".claude/hooks/**"),
         // Plugin code, which the host Claude loads and runs the same way.
         inHome(".claude/plugins"),
-        inHome(".claude/plugins/**"),
         // Installed packages, at any depth: a nested workspace has its own.
         // node_modules/.bin is on PATH for every `pnpm run` typed on the host,
         // and a package's entry point runs on the next command that imports it,
         // so a file planted here executes outside the sandbox.
         "**/node_modules",
-        "**/node_modules/**",
         // Environment files, which are gitignored for the same reason and read
         // by the host toolchain. NODE_OPTIONS="--require ./evil.js" in one of
         // them runs on the next `node` invoked outside the sandbox.

@@ -60,8 +60,7 @@
     //
     // Upstream fix: https://github.com/vitejs/vite/pull/23544
     "denyWriteOverrides": {
-      "**/node_modules": [],
-      "**/node_modules/**": []
+      "**/node_modules": []
     },
     "allowMachLookup": [],
     "requiredEnv": []
