@@ -573,8 +573,8 @@ function buildSrtSettings(opts: {
         inHome(".local/share/claude"),
         // Claude's runtime state, the lock files among it.
         inHome(".local/state/claude"),
-        // Caches, Claude's own and those of the tools it shells out to.
-        inHome(".cache"),
+        // Claude's own cache.
+        inHome(".cache/claude"),
         // macOS preference plists, read on startup by the system libraries the
         // native binary links against.
         inHome("Library/Preferences"),
@@ -599,8 +599,8 @@ function buildSrtSettings(opts: {
         inHome(".claude.json"),
         // The copy Claude writes beside it before rewriting the config.
         inHome(".claude.json.backup"),
-        // Caches, Claude's own and those of the tools it shells out to.
-        inHome(".cache"),
+        // Claude's own cache.
+        inHome(".cache/claude"),
         // Whatever else CSB_EXTRA_WRITE and the selected profiles ask for.
         ...extraWrite,
       ],

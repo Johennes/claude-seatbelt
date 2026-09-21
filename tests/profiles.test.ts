@@ -208,6 +208,8 @@ describe("the node profile", () => {
       env: { CSB_PROFILES: "node" },
       script: [
         `p pnpm_resolves 'command -v pnpm'`,
+        `p read_node_cache  'ls "${path.join(os.homedir(), ".cache", "node")}"'`,
+        `p write_node_cache 'touch "${path.join(os.homedir(), ".cache", "node", "probe")}"'`,
         `p pnpm_lint     'pnpm lint'`,
         `p pnpm_format   'pnpm format:check'`,
         // `pnpm format` differs from `format:check` only in writing, so the
@@ -224,6 +226,16 @@ describe("the node profile", () => {
 
   it("pnpm is on PATH", () => {
     assert.equal(sandbox.probe("pnpm_resolves"), "allowed");
+  });
+
+  it("the corepack cache is readable", () => {
+    assert.equal(sandbox.probe("read_node_cache"), "allowed");
+  });
+
+  // Reading is enough: a version already fetched outside the sandbox runs from
+  // here, and fetching a new one would need the network the profile never opens.
+  it("the corepack cache is not writable", () => {
+    assert.equal(sandbox.probe("write_node_cache"), "denied");
   });
 
   it("pnpm lint runs", () => {

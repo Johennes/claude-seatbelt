@@ -39,7 +39,10 @@
       "~/.local/share/pnpm",
       // The same standalone pnpm at its macOS default, which is where `pnpm
       // store path` reports on this machine.
-      "~/Library/pnpm"
+      "~/Library/pnpm",
+      // Corepack's download cache, which holds the pnpm and yarn it dispatches
+      // to.
+      "~/.cache/node"
     ],
     "extraWrite": [],
     "requiredEnv": [],

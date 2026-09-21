@@ -157,7 +157,7 @@ Everything outside those four stays readable, which is why `/usr`, `/opt` and
 | `~/.local/bin` | Where the native installer puts the `claude` symlink, alongside your other command line tools. |
 | `~/.local/share/claude` | One directory per installed Claude version. Denying it leaves Claude unable to start. |
 | `~/.local/state/claude` | Claude's runtime state, the lock files among it. |
-| `~/.cache` | Caches, Claude's own and those of the tools it shells out to. |
+| `~/.cache/claude` | Claude's own cache. |
 | `~/Library/Preferences` | macOS preference plists, read on startup by the system libraries the native binary links against. |
 | `$CSB_EXTRA_READ` | Whatever else you ask for. |
 
@@ -172,7 +172,7 @@ closed again where an opened region contains something dangerous.
 | `~/.claude` | Session transcripts, todos and project state, all written as Claude runs. |
 | `~/.claude.json` | Updated in place as projects are opened and MCP servers are added. |
 | `~/.claude.json.backup` | The copy Claude writes beside it before rewriting the config. |
-| `~/.cache` | Caches, Claude's own and those of the tools it shells out to. |
+| `~/.cache/claude` | Claude's own cache. |
 | `$CSB_EXTRA_WRITE` | Whatever else you ask for. |
 
 | Denied for writing | Explanation |
@@ -245,6 +245,7 @@ The profile opens the version manager roots for **reading**, and nothing else:
 | --- | --- |
 | `~/.nvm` | nvm |
 | `~/.local/share/pnpm`, `~/Library/pnpm` | A standalone `pnpm` install, wherever `PNPM_HOME` points. |
+| `~/.cache/node` | Corepack's download cache, which holds the `pnpm` and `yarn` it dispatches to. |
 
 - **No `~/.npmrc`.** That is where a registry auth token lives, and neither
   linting nor formatting needs one. Add it yourself if you use a private

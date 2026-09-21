@@ -136,6 +136,12 @@ describe("the home directory", () => {
         `p write_claude_cmd   'touch $HOME/.claude/commands/injected.md'`,
         `p write_claude_agent 'touch $HOME/.claude/agents/injected.md'`,
         `p write_claude_stgs  'touch $HOME/.claude/settings.json'`,
+        `p read_claude_cache  'ls $HOME/.cache/claude'`,
+        `p write_claude_cache 'touch $HOME/.cache/claude/probe'`,
+        `p list_cache_root    'ls $HOME/.cache'`,
+        `p read_gh_cache      'ls $HOME/.cache/gh'`,
+        `p read_node_cache    'ls $HOME/.cache/node'`,
+        `p write_node_cache   'touch $HOME/.cache/node/probe'`,
         `p list_keychains     'ls $HOME/Library/Keychains'`,
         `p read_login_kc      'head -c 16 $HOME/Library/Keychains/login.keychain-db'`,
         `p write_keychain_dir 'touch $HOME/Library/Keychains/injected'`,
@@ -197,6 +203,30 @@ describe("the home directory", () => {
   // which also grants deleting the keychain. Neither is given.
   it("this user's keychain directory is not listable", () => {
     assert.equal(sandbox.probe("list_keychains"), "denied");
+  });
+
+  it("Claude's own cache is readable", () => {
+    assert.equal(sandbox.probe("read_claude_cache"), "allowed");
+  });
+
+  it("Claude's own cache is writable", () => {
+    assert.equal(sandbox.probe("write_claude_cache"), "allowed");
+  });
+
+  it("the rest of ~/.cache is not listable", () => {
+    assert.equal(sandbox.probe("list_cache_root"), "denied");
+  });
+
+  it("another tool's cache is not readable", () => {
+    assert.equal(sandbox.probe("read_gh_cache"), "denied");
+  });
+
+  it("the corepack cache is not readable without a profile", () => {
+    assert.equal(sandbox.probe("read_node_cache"), "denied");
+  });
+
+  it("the corepack cache is not writable without a profile", () => {
+    assert.equal(sandbox.probe("write_node_cache"), "denied");
   });
 
   it("the login keychain is not readable", () => {
