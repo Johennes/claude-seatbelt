@@ -174,7 +174,7 @@ Everything outside those four stays readable, which is why `/usr`, `/opt` and
 | Readable | Explanation |
 | -------- | ----------- |
 | the workspace | The repository being worked on. |
-| `~/.claude` | Claude's own configuration: settings, agents, commands, skills, etc. |
+| `~/.claude` | Claude's own configuration: settings, agents, commands, skills, etc. Also the transcripts, todos and memory of **every** project, and `history.jsonl`, so a session in one repository can read what was said in another. |
 | `~/.claude.json` | The account record, the MCP server definitions and the per-project history, all read at startup. |
 | `~/.gitconfig` | Git identity, aliases, includes and the credential helper, read by every git invocation. |
 | `~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile` | The shell startup files, sourced whenever a command is run. Without them the shell starts with neither `PATH` nor the rest of the environment you expect. |
@@ -182,8 +182,18 @@ Everything outside those four stays readable, which is why `/usr`, `/opt` and
 | `~/.local/share/claude` | One directory per installed Claude version. Denying it leaves Claude unable to start. |
 | `~/.local/state/claude` | Claude's runtime state, the lock files among it. |
 | `~/.cache/claude` | Claude's own cache. |
-| `~/Library/Preferences` | macOS preference plists, read on startup by the system libraries the native binary links against. |
+| `~/Library/Preferences` | macOS preference plists, read on startup by the system libraries the native binary links against. Every application's plist comes with them, and some third-party applications keep tokens there. |
 | `$CSB_EXTRA_READ` | Whatever else you ask for. |
+
+Two of those grants are wider than they look:
+
+- `~/.claude` is opened whole because Claude reads and writes throughout it, and
+  no narrower grant survives contact with `--resume`, subagents and worktrees.
+  Nothing said in one project is a secret from a session in another.
+- `~/Library/Preferences` could not be narrowed usefully even if the set of plists
+  the binary needs were known: srt's profile allows `user-preference-read`, so
+  `defaults read <domain>` answers through `cfprefsd` for any domain, file grant
+  or not. Writing preferences is denied.
 
 Write is the other way round: denied by default, opened path by path, and then
 closed again where an opened region contains something dangerous.
@@ -421,12 +431,21 @@ Two writable paths carry over into the next un-sandboxed `claude` run:
 
 ### Apple Events
 
-`allowAppleEvents: false` does not stop `osascript` from driving an application
-that is already running.
+**This one is a complete escape, not a corner case.** `allowAppleEvents: false`
+does not stop `osascript` from driving an application that is already running,
+and the terminal that launched `claude-seatbelt` is, by definition, running. One
+`osascript -e 'tell application "Terminal" to do script "…"'` runs a command in a
+new tab of that terminal: outside the sandbox, as you, with your whole
+environment and file system. iTerm2 and the other scriptable terminals are no
+different. The same goes for any other scriptable application that happens to be
+open.
 
-Anything that application can do is outside the sandbox. `open` **is** blocked, so
-an application that is not already running cannot be launched. This is upstream
+`open` **is** blocked, so an application that is not already running cannot be
+launched. That narrows the set of targets and nothing else. This is upstream
 behaviour in sandbox-runtime, not something this tool configures away.
+
+Until the upstream fix lands, treat `osascript` in a Bash command Claude wants to
+run as the sandbox asking to be let out, and do not auto-approve it.
 
 `tests/escape.test.ts` asserts the gap as it actually behaves, so it is reported
 on every run. If it ever closes, that test fails — which is the cue to promote it
