@@ -7,24 +7,29 @@ import { before, describe, it } from "node:test";
 import {
   inHome,
   makeDir,
-  repoRoot,
   sandboxProbe,
   type SandboxResult,
   skipUnlessPresent,
+  testTmp,
   writeFile,
 } from "./helpers.ts";
 
 const claudeCache = inHome(".cache", "claude");
 
-// The workspace, and a sibling that is not it. Both are outside every path the
-// policy opens up, so the sibling is denied for the reason under test.
+// The workspace, and two siblings that are not it. All are outside every path the
+// policy opens up, so the siblings are denied for the reason under test. One of
+// them has a space in its name, which CSB_EXTRA_READ has to be able to carry.
 const workspace = makeDir("fs-ws");
 const outside = makeDir("fs-outside");
+const spaced = makeDir("fs outside");
 
 writeFile(path.join(workspace, "existing.txt"), "workspace file\n");
 writeFile(path.join(workspace, ".git", "config"), "tracked\n");
 writeFile(path.join(workspace, "sub", ".keep"), "");
 writeFile(path.join(outside, "secret.txt"), "sibling secret\n");
+writeFile(path.join(spaced, "secret.txt"), "sibling secret\n");
+// And one in the parent of all three, a step up rather than a step sideways.
+writeFile(path.join(testTmp, "secret.txt"), "parent secret\n");
 
 // The probes below reach for these with `touch`, which cannot create a file
 // whose parent is missing. Without them in place a denial could as easily be
@@ -52,7 +57,7 @@ describe("the workspace", () => {
         `p read_sibling           'cat ${outside}/secret.txt'`,
         `p write_sibling          'touch ${outside}/created.txt'`,
         `p list_sibling           'ls ${outside}'`,
-        `p read_repo_readme       'cat ${repoRoot}/README.md'`,
+        `p read_parent            'cat ${testTmp}/secret.txt'`,
 
         `p read_git_config        'cat .git/config'`,
         `p write_git_config       'touch .git/config'`,
@@ -89,6 +94,8 @@ describe("the workspace", () => {
     assert.equal(sandbox.probe("delete_workspace_file"), "allowed");
   });
 
+  // Read is allow-by-default, so the read denials here come from the test tree
+  // sitting in $HOME, which the policy denies. Writing is denied everywhere.
   it("a sibling directory is not readable", () => {
     assert.equal(sandbox.probe("read_sibling"), "denied");
   });
@@ -101,8 +108,8 @@ describe("the workspace", () => {
     assert.equal(sandbox.probe("list_sibling"), "denied");
   });
 
-  it("files outside the workspace are not readable", () => {
-    assert.equal(sandbox.probe("read_repo_readme"), "denied");
+  it("a file in the workspace's parent is not readable", () => {
+    assert.equal(sandbox.probe("read_parent"), "denied");
   });
 
   it("git metadata is readable", () => {
@@ -284,9 +291,11 @@ describe("CSB_EXTRA_READ", () => {
     sandbox = sandboxProbe({
       extraDomains: "example.com",
       cwd: workspace,
-      env: { CSB_EXTRA_READ: outside },
+      // Colon-separated, PATH-style, so that the second one can hold a space.
+      env: { CSB_EXTRA_READ: `${outside}:${spaced}` },
       script: [
         `p read_extra  'cat ${outside}/secret.txt'`,
+        `p read_spaced 'cat "${spaced}/secret.txt"'`,
         `p write_extra 'touch ${outside}/created.txt'`,
       ].join("\n"),
     });
@@ -294,6 +303,10 @@ describe("CSB_EXTRA_READ", () => {
 
   it("CSB_EXTRA_READ opens a path for reading", () => {
     assert.equal(sandbox.probe("read_extra"), "allowed");
+  });
+
+  it("CSB_EXTRA_READ opens a second, space-bearing path beside it", () => {
+    assert.equal(sandbox.probe("read_spaced"), "allowed");
   });
 
   it("CSB_EXTRA_READ does not also open it for writing", () => {

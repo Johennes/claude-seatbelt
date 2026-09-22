@@ -5,6 +5,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// Ensure the node version before anything else as the rest of this module leans
+// on it.
+ensureNodeJsVersion(20, 11);
+
+/** Ensure that we're on a specific version of Node.js or exit otherwise. */
+function ensureNodeJsVersion(major: number, minor: number): void {
+  const parts = process.versions.node.split(".").map(Number);
+  const [haveMajor = 0, haveMinor = 0] = parts;
+  if (haveMajor < major || (haveMajor === major && haveMinor < minor)) {
+    die(`Node >= ${major}.${minor} required, running ${process.versions.node}`);
+  }
+}
+
 /** The user's home folder. */
 const homeDir = fs.realpathSync(os.homedir());
 
@@ -48,8 +61,8 @@ const BUILT_IN_PROFILES = path.join(import.meta.dirname, "..", "profiles.jsonc")
 const config = {
   srtVersion: process.env["CSB_SRT_VERSION"] ?? "latest",
   extraDomains: words(process.env["CSB_EXTRA_DOMAINS"] ?? ""),
-  extraRead: words(process.env["CSB_EXTRA_READ"] ?? ""),
-  extraWrite: words(process.env["CSB_EXTRA_WRITE"] ?? ""),
+  extraRead: paths("CSB_EXTRA_READ"),
+  extraWrite: paths("CSB_EXTRA_WRITE"),
   profiles: words(process.env["CSB_PROFILES"] ?? ""),
   unsetEnv: words(process.env["CSB_UNSET_ENV"] ?? ""),
   workspace: resolveDir(process.env["CSB_WORKSPACE"] || "."),
@@ -64,6 +77,28 @@ const config = {
 /** Split a space-separated list the way the shell would, dropping empties. */
 function words(value: string): string[] {
   return value.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The paths in a colon-separated variable, PATH-style so that a path may hold a
+ * space, with "~/" expanded. Each has to be absolute or under "~/", as a profile's
+ * are; anything else stops the run.
+ */
+function paths(variable: string): string[] {
+  const entries = (process.env[variable] ?? "").split(":").filter(Boolean);
+  const rejections = entries.filter((entry) => !isPathEntry(entry));
+  if (rejections.length > 0) {
+    for (const rejection of rejections) {
+      note(`${variable}: '${rejection}' is neither absolute nor under '~/'`);
+    }
+    die(`refusing to run: ${rejections.length} invalid entry/entries in ${variable}`);
+  }
+  return entries.map(expandHome);
+}
+
+/** Whether a path reaches srt in a form it takes: absolute, or under "~/". */
+function isPathEntry(entry: string): boolean {
+  return entry.startsWith("/") || entry.startsWith("~/");
 }
 
 /** Locate a binary from PATH. */
@@ -108,9 +143,6 @@ function note(message: string): void {
 
 /** The ... well ... main function. */
 function main(): never {
-  // Ensure that we're at least on Node.js 20.11 which srt itself needs.
-  ensureNodeJsVersion(20, 11);
-
   // Ensure npx is available.
   const npx = which("npx") ?? die("'npx' not found in PATH; it fetches sandbox-runtime");
 
@@ -140,6 +172,7 @@ function main(): never {
   // the cleanup above.
   process.on("SIGINT", () => {});
   process.on("SIGTERM", () => {});
+  process.on("SIGHUP", () => {});
 
   // Load the selected profiles.
   const profiles = applyProfiles(config.profiles);
@@ -215,21 +248,12 @@ function main(): never {
   process.exit(result.status ?? 1);
 }
 
-/** Ensure that we're on a specific version of Node.js or exit otherwise. */
-function ensureNodeJsVersion(major: number, minor: number): void {
-  const parts = process.versions.node.split(".").map(Number);
-  const [haveMajor = 0, haveMinor = 0] = parts;
-  if (haveMajor < major || (haveMajor === major && haveMinor < minor)) {
-    die(`Node >= ${major}.${minor} required, running ${process.versions.node}`);
-  }
-}
-
 /** Ensure that a token was supplied for Claude, or exit explaining how to get one. */
 function ensureToken(): void {
   if (config.token) return;
   note(
-    "CLAUDE_CODE_OAUTH_TOKEN is not set, and the sandbox denies the macOS keychain." +
-      "Create a token outside the sandbox with `claude setup-token`, then export it" +
+    "CLAUDE_CODE_OAUTH_TOKEN is not set, and the sandbox denies the macOS keychain. " +
+      "Create a token outside the sandbox with `claude setup-token`, then export it " +
       "before running claude-seatbelt.",
   );
   die("refusing to run without a token");
@@ -326,7 +350,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
   const available = readProfiles(BUILT_IN_PROFILES);
   const missingEnv: string[] = [];
 
-  for (const name of config.profiles) {
+  for (const name of profiles) {
     const profile = available.get(name);
     if (!profile) {
       const known = [...available.keys()].toSorted().join(", ") || "none";
@@ -356,7 +380,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     die(`refusing to run: ${missingEnv.length} required environment variable(s) unset`);
   }
 
-  note(`profiles ${config.profiles.join(" ")}`);
+  note(`profiles ${profiles.join(" ")}`);
   return additions;
 }
 
@@ -412,7 +436,7 @@ function readProfiles(file: string): Map<string, Profile> {
     // Paths reach srt verbatim, and srt takes absolute paths and "~" only.
     for (const key of ["extraRead", "extraWrite"] as const) {
       for (const entry of profile[key] ?? []) {
-        if (!entry.startsWith("/") && !entry.startsWith("~/")) {
+        if (!isPathEntry(entry)) {
           rejections.push(`${where}: '${key}' entry '${entry}' is neither absolute nor under '~/'`);
         }
       }
@@ -552,8 +576,9 @@ function expandHome(target: string): string {
  * Build the list of allowed domains with ports.
  *
  * Grammar: ".example.com" is the host and all its subdomains, "example.com" is that host
- * exactly. Refused: anything containing "*", TLD-wide entries like ".com" and anything
- * without a dot.
+ * exactly. A host is two or more labels of letters, digits and inner hyphens, so an
+ * IPv4 address passes and "*", a port, a path, ".com" and "localhost" do not. Case is
+ * folded: DNS does not care, and srt compares against what curl sends.
  *
  * Each entry is emitted once per permitted port instead: plain HTTP on 80, HTTPS on 443.
  */
@@ -576,34 +601,25 @@ function buildAllowedDomains(entries: string[]): string[] {
       continue;
     }
 
-    // Subdomain wildcard. At least two labels have to follow the leading dot,
-    // or ".com" would open every host under a TLD.
-    if (entry.startsWith(".")) {
-      const suffix = entry.slice(1);
-      if (!suffix.includes(".") || suffix.startsWith(".") || suffix.endsWith(".")) {
-        rejections.push(
-          `invalid subdomain entry: '${entry}' (need at least two labels after the leading dot, e.g. '.example.com')`,
-        );
-      } else {
-        // Both spellings are needed: srt matches the bare host and the wildcard separately.
-        addDomain(suffix);
-        addDomain(`*.${suffix}`);
-      }
+    // A leading dot means the host and all its subdomains; without it, the host
+    // exactly. Either way the host has to be at least two labels, or ".com" would
+    // open every host under a TLD and "localhost" would name this machine.
+    const subdomains = entry.startsWith(".");
+    const host = (subdomains ? entry.slice(1) : entry).toLowerCase();
+    if (!isHostName(host)) {
+      rejections.push(
+        subdomains
+          ? `invalid subdomain entry: '${entry}' (need at least two labels after the leading dot, e.g. '.example.com')`
+          : `invalid entry: '${entry}' (need a host name of at least two labels, e.g. 'example.com')`,
+      );
       continue;
     }
 
-    // Exact host.
-    if (entry.includes(".")) {
-      if (entry.endsWith(".")) {
-        rejections.push(`malformed entry: '${entry}'`);
-      } else {
-        addDomain(entry);
-      }
-      continue;
+    addDomain(host);
+    // Both spellings are needed: srt matches the bare host and the wildcard separately.
+    if (subdomains) {
+      addDomain(`*.${host}`);
     }
-
-    // Anything else doesn't contain a dot and is rejected.
-    rejections.push(`invalid entry: '${entry}' (must contain a dot)`);
   }
 
   // Quit if we've hit any rejections.
@@ -611,10 +627,18 @@ function buildAllowedDomains(entries: string[]): string[] {
     for (const rejection of rejections) {
       note(rejection);
     }
-    die(`refusing to run: ${rejections.length} invalid entry/entries in CSB_EXTRA_DOMAINS`);
+    die(`refusing to run: ${rejections.length} invalid domain entry/entries`);
   }
 
   return allowed;
+}
+
+/** Whether `host`, already lowercased, is two or more labels of letters, digits and inner hyphens. */
+function isHostName(host: string): boolean {
+  const labels = host.split(".");
+  return (
+    labels.length >= 2 && labels.every((label) => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(label))
+  );
 }
 
 /** Interface used for serialising settings for srt. */

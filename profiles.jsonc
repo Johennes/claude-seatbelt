@@ -49,8 +49,10 @@
     "extraWrite": [],
     "denyWriteOverrides": {
       "**/.git": [
-        // srt's own mandatory denies close .git/hooks and .git/config but only
-        // at the root level, not in submodules and worktrees.
+        // srt's own mandatory denies close .git/hooks and .git/config in the
+        // workspace and in any repository nested in it. A submodule's or a
+        // worktree's gitdir has neither pair of path segments, so those are
+        // named here.
         "**/.git/modules/**/hooks",
         "**/.git/worktrees/**/hooks",
         "**/.git/modules/**/config",

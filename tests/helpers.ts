@@ -10,15 +10,18 @@ if (!fs.existsSync(entryPoint)) {
   throw new Error(`${entryPoint} is missing — run \`pnpm build\` first`);
 }
 
-// Everything a test writes goes under one gitignored directory in the repo root.
-// The repo root, rather than a system temp directory: the workspace has to sit
-// outside $TMPDIR, /private/tmp and /private/var/tmp, which the policy opens up
-// wholesale and which would interfere with what these tests are measuring.
-const testEnv = path.join(repoRoot, ".testenv");
+// Everything a test writes goes under one directory in this user's cache, not
+// under the repo, so nothing depends on where the checkout sits. Inside $HOME on
+// purpose: read is allow-by-default, and $HOME is the region the policy denies, so
+// a sibling of the workspace is unreadable here for the reason the probes test,
+// and here is where repositories live in practice. Not a system temp directory:
+// $TMPDIR, /private/tmp and /private/var/tmp are opened wholesale, and so is
+// ~/.cache/claude, which is why this is a directory beside it.
+const testEnv = path.join(os.homedir(), ".cache", "claude-seatbelt");
 fs.mkdirSync(testEnv, { recursive: true });
 
 // One directory per test process so that tests can run in parallel.
-export const testTmp = fs.mkdtempSync(path.join(testEnv, "run."));
+export const testTmp = fs.mkdtempSync(path.join(testEnv, "test."));
 process.on("exit", () => {
   fs.rmSync(testTmp, { recursive: true, force: true });
 });
@@ -103,6 +106,11 @@ export function sandboxRun(options: SandboxOptions): SandboxResult {
       // override that for every one of them and still let them pass, so it is
       // cleared unless a test sets it deliberately.
       CSB_WORKSPACE: "",
+      // Likewise for everything else ambient that would widen or narrow a run.
+      CSB_PROFILES: "",
+      CSB_EXTRA_READ: "",
+      CSB_EXTRA_WRITE: "",
+      CSB_UNSET_ENV: "",
       CSB_EXTRA_DOMAINS: options.extraDomains,
       CSB_CLAUDE: "/bin/sh",
       // Required, and never actually authenticated against: CSB_CLAUDE is

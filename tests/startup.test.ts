@@ -35,6 +35,29 @@ describe("positive control", () => {
     assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
     assert.equal(sandbox.status, 0);
   });
+
+  // DNS does not care about case, and neither does the entry grammar.
+  it("a mixed-case entry still runs", () => {
+    const sandbox = run("Example.COM");
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+    assert.equal(sandbox.status, 0);
+  });
+});
+
+describe("CSB_EXTRA_READ and CSB_EXTRA_WRITE entries that must stop the run", () => {
+  const cases: Array<[label: string, variable: string, value: string]> = [
+    ["a relative read entry", "CSB_EXTRA_READ", "relative/dir"],
+    ["a relative write entry", "CSB_EXTRA_WRITE", "relative/dir"],
+    ["a bare tilde", "CSB_EXTRA_READ", "~"],
+  ];
+
+  for (const [label, variable, value] of cases) {
+    it(`${label} stops the run`, () => {
+      const sandbox = run("example.com", workspace, { [variable]: value });
+      assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+      assert.notEqual(sandbox.status, 0);
+    });
+  }
 });
 
 describe("CSB_EXTRA_DOMAINS entries that must stop the run", () => {
@@ -45,6 +68,9 @@ describe("CSB_EXTRA_DOMAINS entries that must stop the run", () => {
     ["a wildcard entry", "*.example.com"],
     ["a dotless entry", "localhost"],
     ["a trailing-dot entry", "example.com."],
+    ["a port suffix", "example.com:8443"],
+    ["a path suffix", "example.com/x"],
+    ["a hyphen-led label", "-example.com"],
     ["one bad entry among good ones", "example.com .com"],
   ];
 

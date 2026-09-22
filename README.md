@@ -95,10 +95,10 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 
 | Variable             | Default | Meaning |
 | -------------------- | ------- | ------- |
-| `CSB_WORKSPACE`      | the current directory | The one writable directory, and where Claude is started. Empty falls back to the default. Refused: a path that does not exist or is not a directory, and one that is, or holds, a region denied for reading — `/`, `$HOME`, `/Users`, `/Volumes`, `/Library` — since otherwise the workspace would be opened as a whole. |
+| `CSB_WORKSPACE`      | the current directory | The repository being worked on, opened for reading and writing, and where Claude is started. Empty falls back to the default. Refused: a path that does not exist or is not a directory, and one that is, or holds, a region denied for reading — `/`, `$HOME`, `/Users`, `/Volumes`, `/Library` — since otherwise the workspace would be opened as a whole. |
 | `CSB_EXTRA_DOMAINS`  | empty   | Space-separated domains to allow **on top of** the built-in list below. `.example.com` is the host and all subdomains; `example.com` is that host exactly. |
-| `CSB_EXTRA_READ`     | empty   | Space-separated absolute paths to additionally open for reading. |
-| `CSB_EXTRA_WRITE`    | empty   | Space-separated absolute paths to additionally open for writing. |
+| `CSB_EXTRA_READ`     | empty   | Colon-separated paths to additionally open for reading, `PATH`-style so that a path may hold a space. Absolute, or under `~/`. |
+| `CSB_EXTRA_WRITE`    | empty   | Colon-separated paths to additionally open for writing, likewise. |
 | `CSB_PROFILES`       | empty   | Space-separated profile names, applied in the order given. See [Profiles](#profiles). |
 | `CSB_UNSET_ENV`      | empty   | Space-separated names of environment variables to withhold from the sandboxed process. Everything else is inherited. See [Environment](#environment). |
 | `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. |
@@ -106,7 +106,7 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | **Required.** How Claude authenticates, the keychain being denied. See [Authentication](#authentication). |
 | `TMPDIR`             | `/tmp`  | Where the generated settings file is written, and one of the writable paths inside the sandbox. |
 | `HOME`               | — | Read to locate the config and cache paths listed under **read** above. |
-| `PATH`               | — | Searched for `claude`, `srt` and `npx`. |
+| `PATH`               | — | Searched for `claude` and `npx`. |
 
 ### Domains
 
@@ -129,9 +129,11 @@ inherits.
 An empty `CSB_EXTRA_DOMAINS` is fine and means exactly that: no additions. It is not
 a way to switch the network off — the built-in list still applies.
 
-Entries containing `*` are refused, as are TLD-wide entries like `.com` and
-anything without a dot. Use the leading dot for subdomains. One bad entry stops
-the run rather than being skipped.
+An entry is a host name: two or more labels of letters, digits and inner hyphens,
+so an IPv4 address passes. Anything else is refused — `*`, a port, a path,
+TLD-wide entries like `.com`, anything without a dot — and one bad entry stops
+the run rather than being skipped. Use the leading dot for subdomains. Case does
+not matter.
 
 ### Ports
 
@@ -322,7 +324,7 @@ and `git rebase` work in the workspace:
 
     CSB_PROFILES="git-writable" claude-seatbelt
 
-The base policy's `**/.git` is be dropped. Instead, the profile puts back the names
+The base policy's `**/.git` is dropped. Instead, the profile puts back the names
 that matter, rather than the regions holding them, so that the index, objects and
 refs beside them stay writable:
 

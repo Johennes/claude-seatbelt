@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { before, describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 
 import {
   inHome,
@@ -14,7 +14,6 @@ import {
   sandboxRun,
   skipUnlessPresent,
   warnSkip,
-  testTmp,
   writeFile,
 } from "./helpers.ts";
 
@@ -526,11 +525,11 @@ describe("the git-writable and gh profiles together", { skip: skipUnlessGitPrese
 
 describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
   let sandbox: SandboxResult;
-  const messy = path.join(testTmp, "messy.ts");
-  const ugly = `export  const   x =   {a:1,b:2}\n`;
+  // Where the formatter probe puts its scratch file. Inside this repository,
+  // since that is the workspace here, and gitignored.
+  const scratch = path.join(repoRoot, ".testenv");
 
   before(() => {
-    writeFile(messy, ugly);
     // The probes below use `touch`, which cannot create a file whose parent is
     // missing — without this a denial could as easily be ENOENT as EPERM. This
     // is the directory vite makes for itself in a project that uses it.
@@ -552,10 +551,15 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
         `p pnpm_format   'pnpm format:check'`,
         // `pnpm format` differs from `format:check` only in writing, so the
         // write is proven on a scratch file rather than by reformatting the
-        // repository from inside a test.
-        `p oxfmt_writes  'pnpm exec oxfmt "${messy}"'`,
+        // repository from inside a test. Written, formatted and checked inside
+        // the sandbox, so the probe's exit status is the whole claim.
+        `p oxfmt_writes  'mkdir -p .testenv && printf "export  const   x =   {a:1,b:2}\\n" > .testenv/messy.ts && pnpm exec oxfmt .testenv/messy.ts && grep -q "const x = { a: 1, b: 2 }" .testenv/messy.ts'`,
       ].join("\n"),
     });
+  });
+
+  after(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
   });
 
   it("the sandbox ran and reported", () => {
@@ -598,7 +602,6 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
 
   it("the formatter can rewrite a file in the workspace", () => {
     assert.equal(sandbox.probe("oxfmt_writes"), "allowed");
-    assert.notEqual(fs.readFileSync(messy, "utf8"), ugly);
   });
 });
 
