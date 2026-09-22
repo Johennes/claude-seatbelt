@@ -21,6 +21,23 @@ const BASE_DOMAINS = [
 /** What ports are allowed on domains. */
 const PERMITTED_PORTS = [80, 443] as const;
 
+/**
+ * The regions denied for reading. Read is allow-by-default in srt, so these are
+ * closed as a whole and then re-opened path by path in buildSrtSettings.
+ */
+const DENY_READ = [
+  // This user's home.
+  homeDir,
+  // Every other account's home, and /Users/Shared with it.
+  "/Users",
+  // External disks, network shares and mounted images, any of which can
+  // carry a second home directory.
+  "/Volumes",
+  // The system keychains. Unlike this user's keychains, they do not sit
+  // under any of the regions above, and System.keychain is mode 0644.
+  "/Library/Keychains",
+] as const;
+
 /** The profiles shipped with the tool, beside dist/ in an installed package. */
 const BUILT_IN_PROFILES = path.join(import.meta.dirname, "..", "profiles.jsonc");
 
@@ -96,8 +113,9 @@ function main(): never {
   // Ensure we have a Claude token.
   ensureToken();
 
-  // Deny running in the user's home folder or the file system root.
-  if (config.workspace === homeDir || config.workspace === "/") {
+  // Deny a workspace that is, or holds, a region denied for reading. Otherwise
+  // allowRead and allowWrite would open it again as a whole.
+  if (DENY_READ.find((region) => isAtOrUnder(region, config.workspace))) {
     die(`refusing to run with ${config.workspace} as the workspace`);
   }
 
@@ -204,6 +222,11 @@ function ensureToken(): void {
       "before running claude-seatbelt.",
   );
   die("refusing to run without a token");
+}
+
+/** Whether `target` is `dir` itself or lies below it, by path segment. */
+function isAtOrUnder(target: string, dir: string): boolean {
+  return target === dir || target.startsWith(dir === "/" ? "/" : `${dir}/`);
 }
 
 /**
@@ -607,19 +630,7 @@ function buildSrtSettings(opts: {
     filesystem: {
       // Read is allow-by-default in srt, so the home directory and the other user
       // data roots are denied as whole regions and then re-opened path by path.
-      denyRead: [
-        // This user's home, resolved through symlinks so that a HOME outside
-        // /Users is covered too.
-        homeDir,
-        // Every other account's home, and /Users/Shared with it.
-        "/Users",
-        // External disks, network shares and mounted images, any of which can
-        // carry a second home directory.
-        "/Volumes",
-        // The system keychains. Unlike this user's keychains, they do not sit
-        // under any of the regions above, and System.keychain is mode 0644.
-        "/Library/Keychains",
-      ],
+      denyRead: [...DENY_READ],
       allowRead: [
         // The repository being worked on.
         workdir,

@@ -95,7 +95,7 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 
 | Variable             | Default | Meaning |
 | -------------------- | ------- | ------- |
-| `CSB_WORKSPACE`      | the current directory | The one writable directory, and where Claude is started. Empty falls back to the default; a path that does not exist, or is not a directory, is refused. |
+| `CSB_WORKSPACE`      | the current directory | The one writable directory, and where Claude is started. Empty falls back to the default. Refused: a path that does not exist or is not a directory, and one that is, or holds, a region denied for reading — `/`, `$HOME`, `/Users`, `/Volumes`, `/Library` — since otherwise the workspace would be opened as a whole. |
 | `CSB_EXTRA_DOMAINS`  | empty   | Space-separated domains to allow **on top of** the built-in list below. `.example.com` is the host and all subdomains; `example.com` is that host exactly. |
 | `CSB_EXTRA_READ`     | empty   | Space-separated absolute paths to additionally open for reading. |
 | `CSB_EXTRA_WRITE`    | empty   | Space-separated absolute paths to additionally open for writing. |

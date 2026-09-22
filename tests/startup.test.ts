@@ -57,10 +57,15 @@ describe("CSB_EXTRA_DOMAINS entries that must stop the run", () => {
   }
 });
 
+// A workspace is opened for reading and writing as a whole, so one that is, or
+// holds, a region the policy denies would hand that region back.
 describe("workspaces that must stop the run", () => {
   const cases: Array<[label: string, cwd: string]> = [
     ["the home directory as the workspace", os.homedir()],
     ["the root directory as the workspace", "/"],
+    ["the parent of the home directory as the workspace", path.dirname(os.homedir())],
+    ["the volumes directory as the workspace", "/Volumes"],
+    ["the parent of the system keychains as the workspace", "/Library"],
   ];
 
   for (const [label, cwd] of cases) {
