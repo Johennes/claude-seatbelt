@@ -140,6 +140,14 @@ describe("requiredEnv", () => {
     assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
   });
 
+  // Withholding what a profile requires is a contradiction, refused rather than
+  // resolved either way.
+  it("CSB_UNSET_ENV cannot name a required variable", () => {
+    const sandbox = run({ ...token, CSB_PROFILES: "gh", CSB_UNSET_ENV: "GH_TOKEN" });
+    assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+    assert.notEqual(sandbox.status, 0);
+  });
+
   // Declaring a variable does not carry it; it is inherited like any other, and
   // the declaration only decides whether the run happens at all.
   it("the variable reaches the sandboxed process", () => {

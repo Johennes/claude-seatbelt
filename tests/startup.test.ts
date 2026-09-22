@@ -93,6 +93,41 @@ describe("CLAUDE_CODE_OAUTH_TOKEN", () => {
   });
 });
 
+describe("CSB_UNSET_ENV", () => {
+  // `-unset` rather than `:-unset`: a variable that is set but empty must still
+  // read as present, or an empty string could pass for withheld.
+  const probe = `echo "GOT \${CSB_PROBE_SECRET-unset}"`;
+  const secret = { CSB_PROBE_SECRET: "leaked" };
+
+  // The control: nothing is withheld unless asked for.
+  it("a variable reaches the sandboxed process by default", () => {
+    const sandbox = sandboxRun({ extraDomains: "", cwd: workspace, script: probe, env: secret });
+    assert.ok(sandbox.printed("GOT leaked"), `expected it through, got:\n${sandbox.output}`);
+  });
+
+  it("a named variable is withheld", () => {
+    const sandbox = sandboxRun({
+      extraDomains: "",
+      cwd: workspace,
+      script: probe,
+      env: { ...secret, CSB_UNSET_ENV: "CSB_PROBE_SECRET" },
+    });
+    assert.ok(sandbox.printed("GOT unset"), `expected it withheld, got:\n${sandbox.output}`);
+  });
+
+  it("a name that is not set is no error", () => {
+    const sandbox = run("", workspace, { CSB_UNSET_ENV: "CSB_NEVER_SET" });
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("an invalid name stops the run", () => {
+    const sandbox = run("", workspace, { CSB_UNSET_ENV: "not-a-name" });
+    assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+    assert.notEqual(sandbox.status, 0);
+  });
+});
+
 describe("awkward characters in CSB_EXTRA_READ and CSB_EXTRA_WRITE", () => {
   it("a quote in CSB_EXTRA_READ does not stop the run", () => {
     const sandbox = run("example.com", workspace, {

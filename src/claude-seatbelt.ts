@@ -21,6 +21,9 @@ const BASE_DOMAINS = [
 /** What ports are allowed on domains. */
 const PERMITTED_PORTS = [80, 443] as const;
 
+/** What an environment variable may be called, for CSB_UNSET_ENV and requiredEnv alike. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /**
  * The regions denied for reading. Read is allow-by-default in srt, so these are
  * closed as a whole and then re-opened path by path in buildSrtSettings.
@@ -48,6 +51,7 @@ const config = {
   extraRead: words(process.env["CSB_EXTRA_READ"] ?? ""),
   extraWrite: words(process.env["CSB_EXTRA_WRITE"] ?? ""),
   profiles: words(process.env["CSB_PROFILES"] ?? ""),
+  unsetEnv: words(process.env["CSB_UNSET_ENV"] ?? ""),
   workspace: resolveDir(process.env["CSB_WORKSPACE"] || "."),
   tmpDir: resolveDir(process.env["TMPDIR"] || "/tmp"),
   claude:
@@ -140,6 +144,9 @@ function main(): never {
   // Load the selected profiles.
   const profiles = applyProfiles(config.profiles);
 
+  // Ensure that what CSB_UNSET_ENV names can be unset.
+  ensureUnsetEnv(config.unsetEnv, profiles.requiredEnv);
+
   // Construct the srt settings.
   const allowedDomains = buildAllowedDomains([
     ...BASE_DOMAINS,
@@ -154,6 +161,7 @@ function main(): never {
     extraWrite: [...config.extraWrite, ...profiles.extraWrite],
     denyWriteOverrides: profiles.denyWriteOverrides,
     allowMachLookup: profiles.allowMachLookup,
+    unsetEnv: config.unsetEnv,
   });
 
   // Write the srt settings file.
@@ -163,6 +171,9 @@ function main(): never {
   // Announce where and how we're running.
   note(`workspace ${config.workspace}`);
   note(`settings ${settingsPath}`);
+  if (config.unsetEnv.length > 0) {
+    note(`unset ${config.unsetEnv.join(" ")}`);
+  }
 
   // Spawn srt.
   const result = spawnSync(
@@ -224,6 +235,28 @@ function ensureToken(): void {
   die("refusing to run without a token");
 }
 
+/**
+ * Check the variables named in CSB_UNSET_ENV, or exit saying what is wrong with
+ * them. A name that is not set is no error. A name a selected profile requires is
+ * refused.
+ */
+function ensureUnsetEnv(unset: string[], required: string[]): void {
+  const rejections: string[] = [];
+  for (const name of unset) {
+    if (!ENV_NAME.test(name)) {
+      rejections.push(`'${name}' is not a valid environment variable name`);
+    } else if (required.includes(name)) {
+      rejections.push(`'${name}' is required by a selected profile`);
+    }
+  }
+  if (rejections.length > 0) {
+    for (const rejection of rejections) {
+      note(rejection);
+    }
+    die(`refusing to run: ${rejections.length} invalid entry/entries in CSB_UNSET_ENV`);
+  }
+}
+
 /** Whether `target` is `dir` itself or lies below it, by path segment. */
 function isAtOrUnder(target: string, dir: string): boolean {
   return target === dir || target.startsWith(dir === "/" ? "/" : `${dir}/`);
@@ -266,6 +299,7 @@ interface ProfileAdditions {
   extraWrite: string[];
   denyWriteOverrides: Record<string, string[]>;
   allowMachLookup: string[];
+  requiredEnv: string[];
 }
 
 /**
@@ -282,6 +316,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     extraWrite: [],
     denyWriteOverrides: {},
     allowMachLookup: [],
+    requiredEnv: [],
   };
 
   if (profiles.length === 0) {
@@ -305,6 +340,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     // The later profile wins on a key both name.
     Object.assign(additions.denyWriteOverrides, profile.denyWriteOverrides ?? {});
     additions.allowMachLookup.push(...(profile.allowMachLookup ?? []));
+    additions.requiredEnv.push(...(profile.requiredEnv ?? []));
 
     for (const variable of profile.requiredEnv ?? []) {
       if (!process.env[variable]) {
@@ -383,7 +419,7 @@ function readProfiles(file: string): Map<string, Profile> {
     }
 
     for (const variable of profile.requiredEnv ?? []) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)) {
+      if (!ENV_NAME.test(variable)) {
         rejections.push(`${where}: '${variable}' is not a valid environment variable name`);
       }
     }
@@ -595,6 +631,9 @@ interface SrtSettings {
     allowLocalBinding: boolean;
     allowMachLookup: string[];
   };
+  credentials: {
+    envVars: Array<{ name: string; mode: "deny" }>;
+  };
   allowAppleEvents: boolean;
   allowPty: boolean;
   enableWeakerNetworkIsolation: boolean;
@@ -614,6 +653,7 @@ function buildSrtSettings(opts: {
   extraWrite: string[];
   denyWriteOverrides: Record<string, string[]>;
   allowMachLookup: string[];
+  unsetEnv: string[];
 }): SrtSettings {
   const {
     workdir,
@@ -623,6 +663,7 @@ function buildSrtSettings(opts: {
     extraWrite,
     denyWriteOverrides,
     allowMachLookup,
+    unsetEnv,
   } = opts;
   const inHome = (...parts: string[]): string => path.join(homeDir, ...parts);
 
@@ -734,6 +775,10 @@ function buildSrtSettings(opts: {
       deniedDomains: [],
       allowLocalBinding: false,
       allowMachLookup,
+    },
+    credentials: {
+      // Unset in the sandboxed process by srt.
+      envVars: unsetEnv.map((name) => ({ name, mode: "deny" })),
     },
     allowAppleEvents: false,
     // Claude is a TUI: without this, ioctl on the controlling terminal is denied

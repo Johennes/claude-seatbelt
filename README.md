@@ -100,6 +100,7 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 | `CSB_EXTRA_READ`     | empty   | Space-separated absolute paths to additionally open for reading. |
 | `CSB_EXTRA_WRITE`    | empty   | Space-separated absolute paths to additionally open for writing. |
 | `CSB_PROFILES`       | empty   | Space-separated profile names, applied in the order given. See [Profiles](#profiles). |
+| `CSB_UNSET_ENV`      | empty   | Space-separated names of environment variables to withhold from the sandboxed process. Everything else is inherited. See [Environment](#environment). |
 | `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. |
 | `CSB_SRT_VERSION`    | `latest` | Which sandbox-runtime version `npx` fetches. Set a release (e.g. `0.0.76`) to pin it. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | **Required.** How Claude authenticates, the keychain being denied. See [Authentication](#authentication). |
@@ -138,6 +139,22 @@ An srt allowlist entry without a `:port` suffix matches every port, so an
 allowlisted host could be reached on 22. Each entry is therefore emitted twice,
 as `:80` and `:443`. If you need an allowlisted host on another port, that is the
 loop to change.
+
+### Environment
+
+The sandboxed process inherits the whole environment of whatever started
+`claude-seatbelt`: `PATH`, the OAuth token, and every other variable exported in
+that shell.
+
+`CSB_UNSET_ENV` names the variables to withhold:
+
+    CSB_UNSET_ENV="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY NPM_TOKEN" claude-seatbelt
+
+Each name goes into the settings file as a `credentials.envVars` entry with
+`mode: "deny"`, and srt unsets it in the sandboxed process.
+
+Names only, no patterns. A name that is not set is no error. A name that a
+selected profile lists under `requiredEnv` is refused.
 
 ### Paths
 
