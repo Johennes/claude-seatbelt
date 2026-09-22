@@ -32,6 +32,8 @@ writeFile(path.join(outside, "secret.txt"), "sibling secret\n");
 writeFile(path.join(workspace, "node_modules", ".bin", ".keep"), "");
 writeFile(path.join(workspace, "node_modules", "pkg", ".keep"), "");
 writeFile(path.join(workspace, "sub", "node_modules", ".keep"), "");
+writeFile(path.join(workspace, ".claude", ".keep"), "");
+writeFile(path.join(workspace, "sub", ".claude", ".keep"), "");
 
 describe("the workspace", () => {
   let sandbox: SandboxResult;
@@ -146,6 +148,8 @@ describe("the home directory", () => {
         `p write_claude_cmd   'touch $HOME/.claude/commands/injected.md'`,
         `p write_claude_agent 'touch $HOME/.claude/agents/injected.md'`,
         `p write_claude_stgs  'touch $HOME/.claude/settings.json'`,
+        `p write_claude_md    'touch $HOME/.claude/CLAUDE.md'`,
+        `p write_claude_skill 'mkdir $HOME/.claude/skills/injected'`,
         `p read_claude_cache  'ls $HOME/.cache/claude'`,
         `p write_claude_cache 'touch $HOME/.cache/claude/probe'`,
         `p list_cache_root    'ls $HOME/.cache'`,
@@ -205,6 +209,16 @@ describe("the home directory", () => {
 
   it("host settings cannot be written", () => {
     assert.equal(sandbox.probe("write_claude_stgs"), "denied");
+  });
+
+  // Loaded into every host session, and so a way to leave instructions behind.
+  it("the user-level memory file cannot be written", () => {
+    assert.equal(sandbox.probe("write_claude_md"), "denied");
+  });
+
+  // The third directory of the kind srt already closes with commands/ and agents/.
+  it("user-level skills cannot be planted", () => {
+    assert.equal(sandbox.probe("write_claude_skill"), "denied");
   });
 
   // Read access to a legacy keychain file is read access to every secret in it,
@@ -298,17 +312,16 @@ describe("gitignored paths inside the workspace", () => {
         `p write_node_modules     'touch node_modules'`,
         `p write_node_modules_bin 'touch node_modules/.bin/pnpm'`,
         `p write_node_modules_pkg 'touch node_modules/pkg/index.js'`,
-        // A nested workspace has its own, which is why the patterns are "**".
         `p write_nested_modules   'touch sub/node_modules/injected.js'`,
-
         `p write_dotenv           'touch .env'`,
         `p write_dotenv_local     'touch .env.local'`,
         `p write_dotenv_prod      'touch .env.production.local'`,
         `p write_nested_dotenv    'touch sub/.env'`,
-
-        // Tracked, so a change to it lands in the diff. Not denied.
+        `p write_proj_settings    'touch .claude/settings.json'`,
+        `p write_proj_local       'touch .claude/settings.local.json'`,
+        `p write_nested_settings  'touch sub/.claude/settings.json'`,
+        `p write_proj_claude_dir  'touch .claude/notes.md'`,
         `p write_dotenv_example   'touch .env.example'`,
-        // Neither is anything else in the workspace.
         `p write_ordinary_file    'touch ordinary.ts'`,
       ].join("\n"),
     });
@@ -349,6 +362,22 @@ describe("gitignored paths inside the workspace", () => {
 
   it("a nested .env is not writable either", () => {
     assert.equal(sandbox.probe("write_nested_dotenv"), "denied");
+  });
+
+  it("project settings are not writable", () => {
+    assert.equal(sandbox.probe("write_proj_settings"), "denied");
+  });
+
+  it("local project settings are not writable", () => {
+    assert.equal(sandbox.probe("write_proj_local"), "denied");
+  });
+
+  it("a nested project's settings are not writable either", () => {
+    assert.equal(sandbox.probe("write_nested_settings"), "denied");
+  });
+
+  it("the rest of the project's .claude directory is still writable", () => {
+    assert.equal(sandbox.probe("write_proj_claude_dir"), "allowed");
   });
 
   it(".env.example is still writable", () => {

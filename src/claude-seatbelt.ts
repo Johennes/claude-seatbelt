@@ -685,20 +685,30 @@ function buildSrtSettings(opts: {
       // last matching rule in a Seatbelt profile wins, so extraWrite cannot
       // reopen them either.
       denyWrite: replaceDenyWrite(denyWriteOverrides, [
-        // Git metadata, anywhere below a writable root. A hook planted here runs
+        // Git metadata, anywhere below the workspace. A hook planted here runs
         // on the host the next time git is invoked, and history is not Claude's
         // to rewrite behind the user's back.
         "**/.git",
         // The host-side settings, which grant permissions and can name hooks.
         inHome(".claude/settings.json"),
+        // The project-side settings, at any depth in the workspace, which do the
+        // same. srt denies .mcp.json beside them for the same reason but leaves
+        // these open.
+        "**/.claude/settings.json",
+        "**/.claude/settings.local.json",
+        // The user-level memory file, loaded into every host session.
+        inHome(".claude/CLAUDE.md"),
+        // User-level skills, offered to every host session and able to carry
+        // scripts. srt already denies .claude/commands and .claude/agents.
+        inHome(".claude/skills"),
         // Hook scripts, which the host Claude runs outside the sandbox.
         inHome(".claude/hooks"),
         // Plugin code, which the host Claude loads and runs the same way.
         inHome(".claude/plugins"),
-        // Installed packages, at any depth: a nested workspace has its own.
-        // node_modules/.bin is on PATH for every `pnpm run` typed on the host,
-        // and a package's entry point runs on the next command that imports it,
-        // so a file planted here executes outside the sandbox.
+        // Installed packages, at any depth in the workspace. `node_modules/.bin`
+        // is on PATH for every `pnpm run` typed on the host, and a package's
+        // entry point runs on the next command that imports it, so a file
+        // planted here executes outside the sandbox.
         "**/node_modules",
         // Environment files, which are gitignored for the same reason and read
         // by the host toolchain. NODE_OPTIONS="--require ./evil.js" in one of

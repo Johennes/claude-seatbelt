@@ -184,12 +184,18 @@ closed again where an opened region contains something dangerous.
 
 | Denied for writing | Explanation |
 | ------------------ | ----------- |
-| `**/.git` | Git metadata, anywhere below a writable root. |
+| `**/.git` | Git metadata, anywhere below the workspace. |
 | `~/.claude/settings.json` | The host-side settings, which grant permissions and can name hooks. |
+| `**/.claude/settings.json`, `**/.claude/settings.local.json` | The project-side settings, anywhere below the workspace, which do the same. |
+| `~/.claude/CLAUDE.md` | The user-level memory file, loaded into every host session. |
+| `~/.claude/skills` | User-level skills, offered to every host session and able to carry scripts. |
 | `~/.claude/hooks` | Hook scripts, which the host Claude runs outside the sandbox. |
 | `~/.claude/plugins` | Plugin code, which the host Claude loads and runs the same way. |
-| `**/node_modules` | Installed packages, at any depth — a nested workspace has its own. |
+| `**/node_modules` | Installed packages, at any depth in the workspace. |
 | `**/.env`, `**/.env.local`, `**/.env.*.local` | Environment files, read by the host toolchain. |
+
+Note that a pattern starting `**/` is relative, and srt resolves it against its
+working directory.
 
 srt's own mandatory deny list already blocks writes to `.git/hooks`,
 `.git/config`, `.gitconfig`, `.gitmodules`, the shell rc files, `.ripgreprc`,
@@ -383,7 +389,20 @@ configured for it. Each run gets:
 - its own proxies. srt binds ephemeral port 0 and bakes the kernel-assigned port
   into that instance's sandbox profile, so there is no fixed port to collide over.
 
-## Known gap
+## Known gaps
+
+### Writable Claude state that the host reads back
+
+Two writable paths carry over into the next un-sandboxed `claude` run:
+
+- `~/.claude.json` holds the user-scope MCP server definitions, which the host
+  Claude starts without asking. It has to stay writable: Claude rewrites it in
+  place on every start and as projects are opened.
+- `~/.claude/projects/<project>/memory/` is loaded into sessions of *that*
+  project. Every project's directory is writable, not only the workspace's own,
+  because the transcripts and todos beside them are written as Claude runs.
+
+### Apple Events
 
 `allowAppleEvents: false` does not stop `osascript` from driving an application
 that is already running.
@@ -394,7 +413,7 @@ behaviour in sandbox-runtime, not something this tool configures away.
 
 `tests/escape.test.ts` asserts the gap as it actually behaves, so it is reported
 on every run. If it ever closes, that test fails — which is the cue to promote it
-to a real denial assertion and delete this section.
+to a real denial assertion and delete this subsection.
 
 A fix for this is pending upstream: https://github.com/anthropics/sandbox-runtime/pull/557
 
