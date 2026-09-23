@@ -177,7 +177,7 @@ Everything outside those four stays readable, which is why `/usr`, `/opt` and
 | -------- | ----------- |
 | the workspace | The repository being worked on. |
 | `~/.claude` | Claude's own configuration: settings, agents, commands, skills, etc. Also the transcripts, todos and memory of **every** project, and `history.jsonl`, so a session in one repository can read what was said in another. |
-| `~/.claude.json` | The account record, the MCP server definitions and the per-project history, all read at startup. |
+| `~/.claude.json`, `~/.claude.json.lock`, `~/.claude.json.tmp.*` | The account record, the MCP server definitions and the per-project history (all read at startup) and the associated lock and temporary files. |
 | `~/.gitconfig` | Git identity, aliases, includes and the credential helper, read by every git invocation. |
 | `~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile` | The shell startup files, sourced whenever a command is run. Without them the shell starts with neither `PATH` nor the rest of the environment you expect. |
 | `~/.local/bin` | Where the native installer puts the `claude` symlink, alongside your other command line tools. |
@@ -206,10 +206,13 @@ closed again where an opened region contains something dangerous.
 | `$TMPDIR` | Where Claude and the tools it runs put their scratch files. |
 | `/private/tmp`, `/private/var/tmp` | The system temp directories, which `$TMPDIR` is not. `/tmp` resolves to the first of them and plenty of tools hardcode it. |
 | `~/.claude` | Session transcripts, todos and project state, all written as Claude runs. |
-| `~/.claude.json` | Updated in place as projects are opened and MCP servers are added. |
-| `~/.claude.json.backup` | The copy Claude writes beside it before rewriting the config. |
+| `~/.claude.json`, `~/.claude.json.lock`, `~/.claude.json.tmp.*` | Rewritten as projects are opened and trusted and as MCP servers are added. |
 | `~/.cache/claude` | Claude's own cache. |
 | `$CSB_EXTRA_WRITE` | Whatever else you ask for. |
+
+Note that a write grant is not enough on its own inside `$HOME`, `/Users` or `/Volumes`.
+The path has to be readable as well, or the lookup fails before the write is
+attempted.
 
 | Denied for writing | Explanation |
 | ------------------ | ----------- |
@@ -425,8 +428,8 @@ configured for it. Each run gets:
 Two writable paths carry over into the next un-sandboxed `claude` run:
 
 - `~/.claude.json` holds the user-scope MCP server definitions, which the host
-  Claude starts without asking. It has to stay writable: Claude rewrites it in
-  place on every start and as projects are opened.
+  Claude starts without asking. It has to stay writable: Claude rewrites it on
+  every start and as projects are opened and trusted.
 - `~/.claude/projects/<project>/memory/` is loaded into sessions of *that*
   project. Every project's directory is writable, not only the workspace's own,
   because the transcripts and todos beside them are written as Claude runs.
@@ -475,10 +478,17 @@ and asserts what the sandboxed process can actually reach — nothing inspects t
 generated settings file. A domain being absent from an allowlist is not the claim;
 the sandboxed process failing to reach it is.
 
+Fixtures go under `~/.cache/claude-seatbelt/test.XXXXXX`, one directory per run,
+removed on exit. Under `$HOME` on purpose: that is where a directory beside the
+workspace is denied for reading, which several probes rely on, and where
+repositories live in practice. The `node` profile tests use this repository
+itself as the workspace, and leave their scratch file in the gitignored
+`.testenv/`.
+
 | file | asks |
 | ---- | ---- |
 | `tests/network.test.ts` | what the sandboxed process can reach: exact vs subdomain entries, lookalike suffixes, non-443 ports, proxy bypass, raw TCP, DNS, LAN addresses |
-| `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, `CSB_EXTRA_READ` |
+| `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, the files `~/.claude.json` is rewritten through, `CSB_EXTRA_READ` |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
 | `tests/profiles.test.ts` | what selecting `clipboard`, `gh`, `git-writable`, `node` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |

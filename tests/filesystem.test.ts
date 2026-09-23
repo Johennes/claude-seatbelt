@@ -149,6 +149,10 @@ describe("the home directory", () => {
         `p read_ssh           'ls $HOME/.ssh'`,
         `p read_aws           'cat $HOME/.aws/credentials'`,
         `p read_claude_config 'cat $HOME/.claude.json'`,
+        `p write_config       'touch $HOME/.claude.json'`,
+        `p mkdir_config_lock  'mkdir $HOME/.claude.json.lock && rmdir $HOME/.claude.json.lock'`,
+        `p write_config_tmp   'touch $HOME/.claude.json.tmp.probe && rm $HOME/.claude.json.tmp.probe'`,
+        `p write_config_other 'touch $HOME/.claude.json.probe && rm $HOME/.claude.json.probe'`,
         `p read_gitconfig     'cat $HOME/.gitconfig'`,
         `p write_gitconfig    'touch $HOME/.gitconfig'`,
         `p write_claude_hook  'touch $HOME/.claude/hooks/injected.sh'`,
@@ -187,6 +191,28 @@ describe("the home directory", () => {
 
   it("the claude config is readable", { skip: skipUnlessPresent(inHome(".claude.json")) }, () => {
     assert.equal(sandbox.probe("read_claude_config"), "allowed");
+  });
+
+  it("the claude config is writable", { skip: skipUnlessPresent(inHome(".claude.json")) }, () => {
+    assert.equal(sandbox.probe("write_config"), "allowed");
+  });
+
+  // Claude never rewrites ~/.claude.json in place: it creates a lock directory
+  // beside it, writes a temp file beside that and renames the temp file over the
+  // original. Deny either and every save fails, so the trust dialog comes back on
+  // the next start. Both are cleaned up again so that a real Claude on the host
+  // does not find a stale lock.
+  it("the config lock directory can be created", () => {
+    assert.equal(sandbox.probe("mkdir_config_lock"), "allowed");
+  });
+
+  it("the config temp file can be written beside it", () => {
+    assert.equal(sandbox.probe("write_config_tmp"), "allowed");
+  });
+
+  // Only those two names are opened, not the rest of $HOME around them.
+  it("any other file beside the config cannot be written", () => {
+    assert.equal(sandbox.probe("write_config_other"), "denied");
   });
 
   it("the git config is readable", { skip: skipUnlessPresent(inHome(".gitconfig")) }, () => {

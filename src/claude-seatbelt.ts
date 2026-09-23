@@ -702,8 +702,11 @@ function buildSrtSettings(opts: {
         // Claude's own configuration: settings, agents, commands, skills, etc.
         inHome(".claude"),
         // The account record, the MCP server definitions and the per-project
-        // history, all read at startup.
+        // history, all read at startup. Claude writes to this file via a lock
+        // and temporary files so these need to be allow-listed as well.
         inHome(".claude.json"),
+        inHome(".claude.json.lock"),
+        inHome(".claude.json.tmp.*"),
         // Git identity, aliases, includes and the credential helper, read by
         // every git invocation. Writing it is denied by srt itself.
         inHome(".gitconfig"),
@@ -745,10 +748,12 @@ function buildSrtSettings(opts: {
         // Session transcripts, todos and project state, all written as Claude
         // runs. The denyWrite entries below close the dangerous parts again.
         inHome(".claude"),
-        // Updated in place as projects are opened and MCP servers are added.
+        // Rewritten as projects are opened, trusted and MCP servers are added.
+        // Claude writes to this file via a lock and temporary files so these
+        // need to be allow-listed as well.
         inHome(".claude.json"),
-        // The copy Claude writes beside it before rewriting the config.
-        inHome(".claude.json.backup"),
+        inHome(".claude.json.lock"),
+        inHome(".claude.json.tmp.*"),
         // Claude's own cache.
         inHome(".cache/claude"),
         // Whatever else CSB_EXTRA_WRITE and the selected profiles ask for.
