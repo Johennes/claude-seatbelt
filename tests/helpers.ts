@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -151,28 +151,96 @@ export function sandboxRun(options: SandboxOptions): SandboxResult {
     // Long enough for srt to bring its proxy up plus a 15s probe cap, short
     // enough that a genuine hang fails the run instead of stalling it.
     timeout: 180_000,
-    env: {
-      ...process.env,
-      // Each test picks its workspace with `cwd`. An ambient CSB_WORKSPACE would
-      // override that for every one of them and still let them pass, so it is
-      // cleared unless a test sets it deliberately.
-      CSB_WORKSPACE: "",
-      // Likewise for everything else ambient that would widen or narrow a run.
-      CSB_PROFILES: "",
-      CSB_EXTRA_READ: "",
-      CSB_EXTRA_WRITE: "",
-      CSB_UNSET_ENV: "",
-      CSB_EXTRA_EXEC: PROBE_EXEC,
-      CSB_EXTRA_DOMAINS: options.extraDomains,
-      CSB_CLAUDE: "/bin/sh",
-      // Required, and never actually authenticated against: CSB_CLAUDE is
-      // /bin/sh. A test that is about the requirement itself clears it again
-      // through `env`.
-      CLAUDE_CODE_OAUTH_TOKEN: "test-token",
-      ...options.env,
-    },
+    env: sandboxEnv(options),
   });
   return new SandboxResult(result.stdout ?? "", result.stderr ?? "", result.status);
+}
+
+/** The environment every invocation starts from, with the test's own on top. */
+function sandboxEnv(options: SandboxOptions): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    // Each test picks its workspace with `cwd`. An ambient CSB_WORKSPACE would
+    // override that for every one of them and still let them pass, so it is
+    // cleared unless a test sets it deliberately.
+    CSB_WORKSPACE: "",
+    // Likewise for everything else ambient that would widen or narrow a run.
+    CSB_PROFILES: "",
+    CSB_EXTRA_READ: "",
+    CSB_EXTRA_WRITE: "",
+    CSB_UNSET_ENV: "",
+    CSB_EXTRA_EXEC: PROBE_EXEC,
+    CSB_EXTRA_DOMAINS: options.extraDomains,
+    CSB_CLAUDE: "/bin/sh",
+    // Required, and never actually authenticated against: CSB_CLAUDE is
+    // /bin/sh. A test that is about the requirement itself clears it again
+    // through `env`.
+    CLAUDE_CODE_OAUTH_TOKEN: "test-token",
+    ...options.env,
+  };
+}
+
+/** A claude-seatbelt invocation that is still running. */
+export interface RunningSandbox {
+  /** Send a signal to claude-seatbelt itself — not to the sandboxed command. */
+  kill(signal: NodeJS.Signals): void;
+  /** Resolves once the run has printed the marker, or rejects after 60s. */
+  printed(marker: string): Promise<void>;
+  /** The result, once the run has ended. */
+  finished: Promise<SandboxResult>;
+}
+
+/**
+ * Start one claude-seatbelt invocation and hand back the means to act on it
+ * while it runs. For claims about what happens to a run *during* the run —
+ * a signal, for one — where sandboxRun's wait-for-the-end cannot get a word in.
+ */
+export function sandboxStart(options: SandboxOptions): RunningSandbox {
+  const child = spawn(process.execPath, [entryPoint, "-c", options.script], {
+    cwd: options.cwd,
+    env: sandboxEnv(options),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  const watchers: Array<() => void> = [];
+  const notify = (): void => {
+    for (const watcher of watchers) watcher();
+  };
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+    notify();
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+    notify();
+  });
+
+  const finished = new Promise<SandboxResult>((resolve) => {
+    child.on("exit", (status) => {
+      resolve(new SandboxResult(stdout, stderr, status));
+    });
+  });
+
+  return {
+    kill: (signal) => {
+      child.kill(signal);
+    },
+    printed: (marker) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`never printed: ${marker}`)), 60_000);
+        const check = (): void => {
+          if (stdout.includes(marker) || stderr.includes(marker)) {
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+        watchers.push(check);
+        check();
+      }),
+    finished,
+  };
 }
 
 /** Run a probe script, with the `p` helper already defined. */

@@ -173,13 +173,10 @@ async function main(): Promise<never> {
     die(`refusing to run with ${config.workspace} as the workspace`);
   }
 
-  // Claude owns the terminal and handles Ctrl-C itself. A terminal-generated
-  // signal goes to the whole foreground process group, so the child already has
-  // its own copy; these handlers only stop Node from dying first and leaving
-  // srt's proxy and the child behind it unwound.
-  process.on("SIGINT", () => {});
-  process.on("SIGTERM", () => {});
-  process.on("SIGHUP", () => {});
+  // Move into the workspace before srt builds anything. srt anchors its own
+  // mandatory write denies — .mcp.json, .claude/commands, .vscode, .git/hooks —
+  // at process.cwd() when the profile is built.
+  process.chdir(config.workspace);
 
   // Load the selected profiles.
   const profiles = applyProfiles(config.profiles);
@@ -242,6 +239,25 @@ async function main(): Promise<never> {
   // Bring up the proxy and the rest of srt's session state.
   await SandboxManager.initialize(parsed.data);
 
+  // Signals, in two parts.
+  //
+  // Claude owns the terminal and handles Ctrl-C itself. A terminal-generated
+  // signal goes to the whole foreground process group, so the child already has
+  // its own copy; this process only has to survive it so that the proxy stays up
+  // and the teardown below runs after the child is gone.
+  //
+  // But initialize() has just registered `process.once("SIGINT" | "SIGTERM",
+  // reset)` of its own, and reset() closes the proxies. Node runs every
+  // listener, so a no-op beside it would not help: a SIGTERM to this process, or
+  // a Ctrl-C reaching it while Claude is not in raw mode, would tear the proxy
+  // down under a child that keeps running, and every request from then on would
+  // fail with ECONNREFUSED. So srt's listeners come out again. Its "exit"
+  // listener is left alone: by then there is nothing left to serve.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.removeAllListeners(signal);
+    process.on(signal, () => {});
+  }
+
   // Construct the plain shell command to launch the binary.
   const command = quoteShellArgs([config.claude, ...process.argv.slice(2)]);
 
@@ -288,8 +304,9 @@ function run(file: string, args: string[]): Promise<RunResult> {
   return new Promise((resolve) => {
     const child = spawn(file, args, {
       stdio: "inherit",
-      // Both srt and Claude have to start in the workspace. srt anchors its own
-      // mandatory write denies at its process.cwd().
+      // Inherited from this process, which moved into the workspace before srt
+      // built the profile. Named anyway, so that it is a decision here and not a
+      // consequence of the chdir above.
       cwd: config.workspace,
       env: { ...process.env, DISABLE_AUTOUPDATER: "1" },
     });

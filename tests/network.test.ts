@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
 
-import { makeDir, sandboxProbe, type SandboxResult } from "./helpers.ts";
+import { makeDir, sandboxProbe, type SandboxResult, sandboxStart } from "./helpers.ts";
 
 /**
  * curl through the proxy environment that claude-seatbelt sets for the sandboxed process.
@@ -176,5 +176,27 @@ describe("an allowlist entry pointed at this machine or its network", () => {
 
   it("an allowlisted link-local address is unreachable", () => {
     assert.equal(sandbox.probe("link_local"), "denied");
+  });
+});
+
+// The proxy is served by the claude-seatbelt process itself, and srt registers
+// its own signal handlers that would close it. A signal to that process must not
+// take the proxy out from under a sandboxed command that is still running.
+describe("a signal to claude-seatbelt while the sandboxed command runs", () => {
+  it("leaves the proxy up for the rest of the run", async () => {
+    const running = sandboxStart({
+      extraDomains: "example.com",
+      cwd: makeDir("signal-ws"),
+      script: [
+        `${curlViaProxy} https://example.com/ && echo BEFORE_OK`,
+        `sleep 5`,
+        `${curlViaProxy} https://example.com/ && echo AFTER_OK`,
+      ].join("\n"),
+    });
+    await running.printed("BEFORE_OK");
+    running.kill("SIGTERM");
+    const result = await running.finished;
+    assert.ok(result.printed("AFTER_OK"), `expected the proxy still up, got:\n${result.output}`);
+    assert.equal(result.status, 0);
   });
 });

@@ -340,6 +340,57 @@ describe("CSB_EXTRA_READ", () => {
   });
 });
 
+// srt anchors its own mandatory denies at process.cwd() when it builds the
+// profile, and it builds it inside claude-seatbelt. Every other suite launches
+// from the workspace, where that is the same place. This one launches from a
+// directory the workspace is not under, which is what CSB_WORKSPACE is for.
+describe("srt's mandatory denies, launched from outside the workspace", () => {
+  let sandbox: SandboxResult;
+  const anchored = makeDir("anchor-ws");
+
+  before(() => {
+    // Parents made ahead of time, so that a denial is EPERM rather than the
+    // ENOENT `touch` reports for a missing directory.
+    makeDir("anchor-ws", ".claude", "commands");
+    makeDir("anchor-ws", ".vscode");
+    sandbox = sandboxProbe({
+      extraDomains: "example.com",
+      // Not the workspace, and not above it either: ~/.cache is under $HOME, and
+      // /private/tmp is not.
+      cwd: "/private/tmp",
+      env: { CSB_WORKSPACE: anchored },
+      script: [
+        `p write_mcp_json     'touch .mcp.json'`,
+        `p write_proj_command 'touch .claude/commands/injected.md'`,
+        `p write_vscode       'touch .vscode/tasks.json'`,
+        `p write_ordinary     'touch ordinary.ts'`,
+      ].join("\n"),
+    });
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  // The control: the workspace is open, so a denial below is the deny at work
+  // and not a run that never got there.
+  it("an ordinary file in the workspace is writable", () => {
+    assert.equal(sandbox.probe("write_ordinary"), "allowed");
+  });
+
+  it(".mcp.json is not", () => {
+    assert.equal(sandbox.probe("write_mcp_json"), "denied");
+  });
+
+  it("nor is a project command", () => {
+    assert.equal(sandbox.probe("write_proj_command"), "denied");
+  });
+
+  it("nor is .vscode", () => {
+    assert.equal(sandbox.probe("write_vscode"), "denied");
+  });
+});
+
 describe("gitignored paths inside the workspace", () => {
   let sandbox: SandboxResult;
 
