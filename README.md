@@ -106,7 +106,7 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 | `CSB_EXTRA_EXEC`     | empty   | Colon-separated paths to additionally allow **executing**. Absolute, under `~/`, or under `./` for the workspace. A trailing `/**` takes the whole tree below a directory. See [Execution](#execution). |
 | `CSB_PROFILES`       | empty   | Space-separated profile names, applied in the order given. See [Profiles](#profiles). |
 | `CSB_UNSET_ENV`      | empty   | Space-separated names of environment variables to withhold from the sandboxed process. Everything else is inherited. See [Environment](#environment). |
-| `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. Allow-listed for execution automatically. |
+| `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run: an absolute path, one under `~/`, or a bare name to find on `PATH`. May be any executable, and is allow-listed for execution automatically. Refused: a relative path, which the allowlist could not name and which would run from wherever the wrapper was started, and anything that is not an executable file. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | **Required.** How Claude authenticates, the keychain being denied. See [Authentication](#authentication). |
 | `TMPDIR`             | `/tmp`  | One of the writable paths inside the sandbox. |
 | `HOME`               | — | Read to locate the config and cache paths listed under **read** above. |

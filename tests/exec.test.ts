@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { before, describe, it } from "node:test";
 
@@ -343,6 +344,42 @@ describe("finding claude on PATH", () => {
       `expected the refusal to say so, got:\n${sandbox.output}`,
     );
   });
+
+  // CSB_CLAUDE takes the same three forms as any other path the allowlist has
+  // to name, plus a bare name, which is looked up the way `claude` itself is.
+  const runAs = (claude: string, extra: Record<string, string> = {}): SandboxResult =>
+    sandboxRun({ extraDomains: "", cwd: workspace, script, env: { CSB_CLAUDE: claude, ...extra } });
+
+  it("CSB_CLAUDE as a bare name is looked up on PATH", () => {
+    const sandbox = runAs("claude", { PATH: `${workspace}:/usr/bin:/bin` });
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+  });
+
+  it("CSB_CLAUDE under '~/' is expanded", () => {
+    // The fixture lives under $HOME, which is where the test root is.
+    const fake = path.join(workspace, "claude");
+    assert.ok(fake.startsWith(`${os.homedir()}/`), `fixture not under $HOME: ${fake}`);
+    const sandbox = runAs(`~/${path.relative(os.homedir(), fake)}`);
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+  });
+
+  it("CSB_CLAUDE as a relative path stops the run", () => {
+    const sandbox = runAs("./claude");
+    assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+    assert.ok(
+      sandbox.printed("neither absolute"),
+      `expected the refusal to say why, got:\n${sandbox.output}`,
+    );
+  });
+
+  it("CSB_CLAUDE that is not an executable file stops the run", () => {
+    const sandbox = runAs(path.join(workspace, "no-such-claude"));
+    assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+    assert.ok(
+      sandbox.printed("not an executable file"),
+      `expected the refusal to say why, got:\n${sandbox.output}`,
+    );
+  });
 });
 
 // An npm or Homebrew install of Claude is a `#!/usr/bin/env node` script, and
@@ -504,6 +541,9 @@ describe("the unix profile", { skip: skipUnlessPresent("/usr/bin/sed", "/bin/ls"
       env: { CSB_PROFILES: "unix", CSB_EXTRA_EXEC: "" },
       script: [
         `p toolbox 'ls / | sed -n 1p'`,
+        // /usr/bin/strings is an xcselect stub that re-execs the developer
+        // tools' copy, so this is two execs, and the profile has to name both.
+        `p strings 'strings /bin/ls'`,
         // Not in the toolbox, and the profile is not a way to get at it.
         `p curl    'curl --version'`,
         `p python  'python3 -c "print(1)"'`,
@@ -513,6 +553,10 @@ describe("the unix profile", { skip: skipUnlessPresent("/usr/bin/sed", "/bin/ls"
 
   it("brings the everyday commands", () => {
     assert.equal(sandbox.probe("toolbox"), "allowed");
+  });
+
+  it("including the one that is a stub for the developer tools", () => {
+    assert.equal(sandbox.probe("strings"), "allowed");
   });
 
   it("without bringing curl", () => {

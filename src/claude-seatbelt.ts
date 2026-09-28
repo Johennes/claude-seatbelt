@@ -69,10 +69,7 @@ const config = {
   unsetEnv: words(process.env["CSB_UNSET_ENV"] ?? ""),
   workspace: resolveDir(process.env["CSB_WORKSPACE"] || "."),
   tmpDir: resolveDir(process.env["TMPDIR"] || "/tmp"),
-  claude:
-    process.env["CSB_CLAUDE"] ||
-    which("claude") ||
-    die("'claude' not found in PATH (set CSB_CLAUDE)"),
+  claude: resolveClaude(process.env["CSB_CLAUDE"] ?? ""),
   token: process.env["CLAUDE_CODE_OAUTH_TOKEN"] ?? "",
   shell: loginShell(),
 } as const;
@@ -134,6 +131,34 @@ function which(command: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * The binary this run is pointed at, in a form the exec allowlist can name:
+ * absolute, under "~/", or a bare name to find on PATH — which is how `claude`
+ * itself is found when CSB_CLAUDE is unset. A relative path is refused: the
+ * allowlist would carry it as a literal that matches nothing, and it would be
+ * run from wherever the wrapper happened to be started rather than from the
+ * workspace. Something that is not an executable file is refused for the same
+ * reason a missing profile is: better one line now than a sandbox that starts
+ * and has nothing to run.
+ */
+function resolveClaude(requested: string): string {
+  const name = requested || "claude";
+  if (!name.includes("/")) {
+    return which(name) ?? die(`'${name}' not found in PATH${requested ? "" : " (set CSB_CLAUDE)"}`);
+  }
+  if (!isValidPathEntry(name)) {
+    die(`CSB_CLAUDE: '${name}' is neither absolute, under '~/', nor a bare name to find on PATH`);
+  }
+  const claude = expandHome(name);
+  try {
+    fs.accessSync(claude, fs.constants.X_OK);
+    if (!fs.statSync(claude).isFile()) throw new Error("not a file");
+  } catch {
+    die(`CSB_CLAUDE: '${claude}' is not an executable file`);
+  }
+  return claude;
 }
 
 /** Determines this account's login shell by resolving $SHELL. */

@@ -324,7 +324,12 @@
       "/usr/bin/nl",
       "/usr/bin/od",
       "/usr/bin/xxd",
+      // The one xcselect stub in this list, checked with `otool -L | grep
+      // libxcselect`: /usr/bin/strings re-execs the developer tools' copy, so
+      // that second exec is named here too, as the git profile does for git.
       "/usr/bin/strings",
+      "/Library/Developer/CommandLineTools/usr/bin/strings",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/strings",
       "/usr/bin/column",
       "/usr/bin/expand",
       "/usr/bin/split",
