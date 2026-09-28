@@ -8,6 +8,9 @@ controlled via environment variables. Only compatible with macOS for the moment.
 
 [srt]: https://github.com/anthropics/sandbox-runtime
 
+- **execution** — denied. Nothing runs but the shells and the `claude` binary
+  itself, plus whatever a profile or `CSB_EXTRA_EXEC` names. Listed under
+  [Execution](#execution).
 - **network** — denied, except a built-in list of the domains Claude itself needs
   plus anything in `CSB_EXTRA_DOMAINS`, reached through srt's proxies. srt also
   refuses any name that resolves to loopback, link-local, one of this host's own
@@ -25,8 +28,9 @@ empty. Claude starts there either way.
 
 ## Requirements
 
-Node >= 20.11, and `npx` on `PATH`. sandbox-runtime itself needs no installing —
-`npx` fetches it.
+Node >= 20.11. sandbox-runtime is a pinned dependency. srt has no execution
+policy of its own, so this tool drives it as a library and writes the exec
+allowlist into the Seatbelt profile srt builds. See [Execution](#execution).
 
 A `CLAUDE_CODE_OAUTH_TOKEN`, which is mandatory. See [Authentication](#authentication).
 
@@ -99,14 +103,15 @@ what you want when working on claude-seatbelt itself; point it anywhere else wit
 | `CSB_EXTRA_DOMAINS`  | empty   | Space-separated domains to allow **on top of** the built-in list below. `.example.com` is the host and all subdomains; `example.com` is that host exactly. |
 | `CSB_EXTRA_READ`     | empty   | Colon-separated paths to additionally open for reading, `PATH`-style so that a path may hold a space. Absolute, or under `~/`. |
 | `CSB_EXTRA_WRITE`    | empty   | Colon-separated paths to additionally open for writing, likewise. |
+| `CSB_EXTRA_EXEC`     | empty   | Colon-separated paths to additionally allow **executing**. Absolute, under `~/`, or under `./` for the workspace. A trailing `/**` takes the whole tree below a directory. See [Execution](#execution). |
 | `CSB_PROFILES`       | empty   | Space-separated profile names, applied in the order given. See [Profiles](#profiles). |
 | `CSB_UNSET_ENV`      | empty   | Space-separated names of environment variables to withhold from the sandboxed process. Everything else is inherited. See [Environment](#environment). |
-| `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. |
-| `CSB_SRT_VERSION`    | `latest` | Which sandbox-runtime version `npx` fetches. Set a release (e.g. `0.0.76`) to pin it. |
+| `CSB_CLAUDE`         | `claude` from `PATH` | Which `claude` to run. Used verbatim, so it may be any executable. Allow-listed for execution automatically. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | — | **Required.** How Claude authenticates, the keychain being denied. See [Authentication](#authentication). |
-| `TMPDIR`             | `/tmp`  | Where the generated settings file is written, and one of the writable paths inside the sandbox. |
+| `TMPDIR`             | `/tmp`  | One of the writable paths inside the sandbox. |
 | `HOME`               | — | Read to locate the config and cache paths listed under **read** above. |
-| `PATH`               | — | Searched for `claude` and `npx`. |
+| `PATH`               | — | Searched for `claude`, and for `$SHELL` when that is a bare name. Relative entries — `.`, or an empty one — are skipped because they resolve against the workspace. |
+| `SHELL`              | — | Allow-listed for execution, being the shell Claude runs a command with. A bare name is resolved on `PATH`. See [Execution](#execution). |
 
 ### Domains
 
@@ -142,6 +147,63 @@ allowlisted host could be reached on 22. Each entry is therefore emitted twice,
 as `:80` and `:443`. If you need an allowlisted host on another port, that is the
 loop to change.
 
+### Execution
+
+Nothing runs unless it is named. Seatbelt checks `process-exec` on every
+`execve`, in the sandboxed process and in every descendant of it, so this is a
+boundary rather than a convention: a denied binary fails with `Operation not
+permitted` and exit status 126.
+
+sandbox-runtime has no setting for this — it emits a blanket `(allow
+process-exec)` — so claude-seatbelt drives srt as a library, takes the Seatbelt
+profile it builds, and appends the rules below to it. The last matching rule in
+a Seatbelt profile wins, so they override srt's. If the profile ever comes back
+in a shape those rules cannot be appended to, the run is refused rather than
+started without them.
+
+Allowed before any profile is selected:
+
+| | |
+| --- | --- |
+| `/bin/bash` | The shell srt starts inside the sandbox, which then starts Claude, and what Claude falls back to for a command when `$SHELL` is unset. |
+| `$SHELL` | This account's login shell, which is the one Claude runs a command with. When it is unset or names nothing, Claude falls back to `/bin/bash`, which is on the list anyway. |
+| `~/.local/share/claude/versions/**` | The native installer's layout: one directory per installed version, so an update does not lock you out. Claude's bundled `rg` is the same binary under another `argv[0]`. |
+| `$CSB_CLAUDE` | Whatever you pointed the tool at, and what that resolves to. |
+
+Entries are paths, in three forms:
+
+| form | means |
+| ---- | ----- |
+| `/usr/bin/git` | That binary. |
+| `~/.nvm/versions/node/**` | Everything below that directory. |
+| `./node_modules/**` | The same, taken from the workspace. |
+
+Every entry is emitted twice: as written, and as it resolves through symlinks.
+Seatbelt matches the path the kernel arrived at, so a Homebrew command — a
+symlink into its Cellar — would otherwise be denied under the name you typed.
+Shims that are not symlinks have to be named in full: `/usr/bin/git` re-execs the
+real git under `/Library/Developer`, and that second exec is checked in its own
+right.
+
+What this is not:
+
+- **Not a limit on an allow-listed interpreter.** `bash`, `python3`, `node`,
+  `perl` and `awk` run whatever they are given. Allow-listing one is the decision
+  that code in that language may run at all; what bounds it from there is the
+  filesystem and domain policy, not this list.
+- **Not a limit on shell builtins.** `echo`, `cd`, redirection, loops and
+  `read` never exec, so they always work. `bash` can open a socket with
+  `/dev/tcp/host/port` without exec'ing anything — still bounded by the domain
+  allowlist, so it reaches no further than `curl` would have.
+- **Not a content check.** `sh script.sh` runs the script, because the binary
+  that starts is `sh`. What the allowlist stops is `./script.sh`, where the
+  script itself is the thing being executed.
+
+The workspace is writable, so nothing in it is executable by default: a binary
+Claude fetched or a script it just wrote is denied. Grant what a repository needs
+with `./`-prefixed entries, the [node-modules-exec](#node-modules-exec) profile
+for its installed tools, or [workspace-exec](#workspace-exec) for the lot.
+
 ### Environment
 
 The sandboxed process inherits the whole environment of whatever started
@@ -152,7 +214,7 @@ that shell.
 
     CSB_UNSET_ENV="AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY NPM_TOKEN" claude-seatbelt
 
-Each name goes into the settings file as a `credentials.envVars` entry with
+Each name goes into srt's settings as a `credentials.envVars` entry with
 `mode: "deny"`, and srt unsets it in the sandboxed process.
 
 Names only, no patterns. A name that is not set is no error. A name that a
@@ -257,19 +319,57 @@ They live in one file, `profiles.jsonc` beside the package.
 | `extraDomains` | Appended to `CSB_EXTRA_DOMAINS`. |
 | `extraRead` | Appended to `CSB_EXTRA_READ`. Absolute, or under `~/`. |
 | `extraWrite` | Appended to `CSB_EXTRA_WRITE`. Absolute, or under `~/`. |
+| `extraExec` | Appended to `CSB_EXTRA_EXEC`. Absolute, under `~/`, or under `./` for the workspace. |
 | `denyWriteOverrides` | A map from a `denyWrite` entry to a replacement; an empty list drops it outright. This is sometimes required because `denyWrite` beats `allowWrite` in srt: a path this tool denies cannot be given back through `extraWrite` by anyone. A key that is not a current `denyWrite` entry is rejected. |
 | `allowMachLookup` | XPC/Mach services to open, srt's `network.allowMachLookup`. |
 | `requiredEnv` | Environment variables the tool needs, by name. They are inherited from the caller like everything else; naming them here turns a tool that misbehaves silently without its credential into a run that is refused. |
 
+The shipped ones:
+
+| profile | what it is for |
+| ------- | -------------- |
+| [unix](#unix) | The everyday command line toolbox. Start here. |
+| [clipboard](#clipboard) | Copying out of the TUI. |
+| [curl](#curl) | `curl`, against the allow-listed domains. |
+| [gh](#gh) | The GitHub CLI, against the API. |
+| [git](#git) | Running git at all. |
+| [git-writable](#git-writable) | Letting git write to `.git`. |
+| [node](#node) | Node toolchains installed under `$HOME`. |
+| [node-modules-exec](#node-modules-exec) | The workspace's own installed tools. |
+| [node-modules-writable](#node-modules-writable) | Tools that transpile into `node_modules`. |
+| [workspace-exec](#workspace-exec) | Anything in the workspace. |
+
+### unix
+
+The everyday commands — `ls`, `cat`, `grep`, `sed`, `awk`, `find`, `sort`,
+`diff`, `tar` and the rest of that toolbox:
+
+    CSB_PROFILES="unix" claude-seatbelt
+
+Execution is denied by default, so without this profile or something like it a
+session has shell builtins and very little else.
+
+The list is in `profiles.jsonc`. What is deliberately **not** in it:
+
+- **No interpreters.** `python3`, `perl`, `ruby` and `node` are not here.
+- **No network tools.** `curl` has its [own profile](#curl); `nc`, `ssh` and
+  `scp` have none.
+- **No compilers, no package managers, no `sudo`, no `osascript`, no `open`.**
+
+`xargs`, `env` and `find -exec` are in it, and none of them widens anything: the
+command each of those starts is checked against the allowlist in its own right.
+
 ### clipboard
 
-Makes copying out of the TUI work, by opening one Mach service:
+Makes copying out of the TUI work, by opening one Mach service and the two
+commands that talk to it:
 
     CSB_PROFILES="clipboard" claude-seatbelt
 
 | | |
 | --- | --- |
 | `com.apple.pasteboard.1` | The pasteboard server, which `pbcopy` and `pbpaste` talk to. Without it `pbcopy` exits 1. |
+| `/usr/bin/pbcopy`, `/usr/bin/pbpaste` | The commands themselves, which are on no other list. |
 
 **Try your terminal's OSC 52 setting first.** Claude emits `\x1b]52;c;<base64>`
 down the pty alongside its `pbcopy` call, and that path needs nothing from the
@@ -289,6 +389,17 @@ working at the same moment, so whatever is on the host clipboard — a password
 manager's last copy among it — is readable inside the sandbox, and
 `api.anthropic.com` is open. srt warns separately that a Mach service is a
 channel of its own, outside the proxy and so outside the domain allowlist.
+
+### curl
+
+`curl`, from `/usr/bin` or from Homebrew:
+
+    CSB_PROFILES="curl" claude-seatbelt
+
+Being able to start it changes nothing about where it can go: every request still
+goes through srt's proxy and is still bounded by the domain allowlist. The
+profile exists because `curl` is a fetch tool rather than a text tool, and that
+is worth selecting on purpose.
 
 ### gh
 
@@ -317,15 +428,34 @@ What the profile opens:
 | --- | --- |
 | `api.github.com` | REST and GraphQL. **Not** `github.com`, so the OAuth device flow (`github.com/login/device/code`) has nowhere to go and a *new* token cannot be minted inside the sandbox. `open` is blocked too, so no browser flow either. |
 | `~/.config/gh` | `config.yml` and `hosts.yml`, which `gh` refuses to start without. Neither holds the token. |
+| `/opt/homebrew/bin/gh`, `/usr/local/bin/gh` | Permission to run it, on both Homebrew prefixes. `gh pr checkout` and friends shell out to git, so select [git](#git) beside this one for those. |
 | `GH_TOKEN` | Required. The run is refused if it is unset or empty. |
 | `com.apple.trustd.agent` | `gh` is a Go binary, and Go on macOS verifies TLS through the Security framework rather than a CA bundle, so without this every request fails with `x509: OSStatus -26276`. srt warns that trustd is an exfiltration path in its own right — one that does not go through the proxy, and so is not bounded by the domain allowlist. |
+
+### git
+
+Permission to run git at all — `status`, `log`, `diff`, `show`, `blame`:
+
+    CSB_PROFILES="git" claude-seatbelt
+
+Writing to `.git` remains denied — that is [git-writable](#git-writable) — and so does reaching a remote, which is the network policy rather than this one.
+
+What it names:
+
+| | |
+| --- | --- |
+| `/usr/bin/git` | The shim, which is not a symlink. |
+| `/Library/Developer/CommandLineTools/usr/bin/git`, the Xcode path beside it | What that shim re-execs. Naming only the shim stops git at its second exec. |
+| the `libexec/git-core` trees | git dispatches subcommands to its own helper binaries — `git-remote-https` for a fetch, `git-sh-setup` for the shell-based ones. |
+| `/opt/homebrew/bin/git`, `/usr/local/bin/git` and their `git-core` | Homebrew's git, which takes precedence on `PATH` where it is installed. |
 
 ### git-writable
 
 Opens `.git` for writing, so `git add`, `git commit`, `git branch`, `git stash`
-and `git rebase` work in the workspace:
+and `git rebase` work in the workspace. Select it beside [git](#git), which is
+what makes the binary runnable in the first place:
 
-    CSB_PROFILES="git-writable" claude-seatbelt
+    CSB_PROFILES="git git-writable" claude-seatbelt
 
 The base policy's `**/.git` is dropped. Instead, the profile puts back the names
 that matter, rather than the regions holding them, so that the index, objects and
@@ -390,6 +520,19 @@ The profile opens the version manager roots for **reading**:
 | `~/.npm-global`, `~/.npm-packages` | The two conventional homes for an npm prefix moved out of `/usr/local`, which is where `npm install -g pnpm` then puts it. |
 | `~/.cache/node` | Corepack's download cache, which holds the `pnpm` and `yarn` it dispatches to. |
 
+and the same roots for **execution**, plus the pieces a shim needs on the way:
+
+| | |
+| --- | --- |
+| the version manager trees | Whole trees rather than the handful of names in each `bin/`: a version manager holds one per installed version, and a globally installed package puts its entry point in there beside node. |
+| `/usr/bin/env` | A shebang is an exec of its own, and `#!/usr/bin/env node` is what npm, npx, pnpm and most installed tools start with. |
+| `/usr/bin/dirname`, `basename`, `readlink`, `sed`, `uname` | What the shell shims in a `node_modules/.bin` write themselves out of. Deny them and the shim computes its paths from an empty string rather than failing outright. |
+| Homebrew's `node`, `npm`, `npx`, `pnpm`, `yarn` | For an installation that uses no version manager at all. |
+
+node is an interpreter, so this is not a list of what may run: it is the decision
+that JavaScript may run, with the filesystem and the domain allowlist as the
+boundary that remains.
+
 - **No `~/.npmrc`.** That is where a registry auth token lives, and neither
   linting nor formatting needs one. Add it yourself if you use a private
   registry, knowing that it hands Claude that token.
@@ -397,8 +540,26 @@ The profile opens the version manager roots for **reading**:
   covered: it needs `registry.npmjs.org` in `CSB_EXTRA_DOMAINS` and a writable
   store. Run installs outside the sandbox and let Claude use what is already in
   `node_modules`.
+- **The workspace's own tools do not run yet.** `pnpm test` reaches for
+  `node_modules/.bin`, which is in the workspace and therefore denied. That is
+  [node-modules-exec](#node-modules-exec).
 - **`node_modules` stays read-only.** A toolchain that writes into it needs
   [node-modules-writable](#node-modules-writable) selected as well.
+
+### node-modules-exec
+
+Lets the workspace's own installed tools run, which is what `pnpm test`, `npm
+run` and `pnpm exec` reach for:
+
+    CSB_PROFILES="node node-modules-exec" claude-seatbelt
+
+The grant is `./node_modules/**`, not `./node_modules/.bin`. Every name in `.bin`
+resolves into the package that provides it — with pnpm, another level down again
+under `.pnpm` — and Seatbelt matches the path the kernel arrived at.
+
+This is a grant over files a dependency update rewrites without anyone reading
+them. It is what running a repository's tests costs, and it is a separate profile
+so that it is chosen rather than inherited.
 
 ### node-modules-writable
 
@@ -412,12 +573,29 @@ srt cannot deny a path inside a region it has opened, so nothing narrower than t
 whole of `node_modules` is expressible and the deny has to go entirely. A fix is
 pending upstream: https://github.com/vitejs/vite/pull/23544
 
+### workspace-exec
+
+Opens the whole workspace for execution — `./gradlew`, `./scripts/build.sh`, a
+checked-in binary:
+
+    CSB_PROFILES="workspace-exec" claude-seatbelt
+
+The workspace is the one place Claude can write, so this says that whatever it
+puts there may also be run: a script written this minute, or a binary fetched
+from an allow-listed host. What that code can then reach is still the filesystem
+and domain policy and nothing more, but the exec allowlist stops being a list at
+this point.
+
+Prefer a narrower `./`-prefixed entry where one will do:
+
+    CSB_EXTRA_EXEC="./gradlew:./scripts/**" claude-seatbelt
+
 ## Running several at once
 
 Concurrent instances in different directories are fine, and nothing needs to be
 configured for it. Each run gets:
 
-- its own settings file, in a `mktemp` directory removed on exit;
+- its own policy, held in the process rather than written anywhere;
 - its own proxies. srt binds ephemeral port 0 and bakes the kernel-assigned port
   into that instance's sandbox profile, so there is no fixed port to collide over.
 
@@ -434,7 +612,7 @@ Two writable paths carry over into the next un-sandboxed `claude` run:
   project. Every project's directory is writable, not only the workspace's own,
   because the transcripts and todos beside them are written as Claude runs.
 
-### Apple Events
+### Apple Events, if you allow-list osascript
 
 **This one is a complete escape, not a corner case.** `allowAppleEvents: false`
 does not stop `osascript` from driving an application that is already running,
@@ -445,18 +623,33 @@ environment and file system. iTerm2 and the other scriptable terminals are no
 different. The same goes for any other scriptable application that happens to be
 open.
 
-`open` **is** blocked, so an application that is not already running cannot be
-launched. That narrows the set of targets and nothing else. This is upstream
-behaviour in sandbox-runtime, not something this tool configures away.
+What stands in front of it is the [exec allowlist](#execution): `osascript` is on
+no shipped profile, so it does not start. `open` is denied twice over — by the
+allowlist, and by srt's Apple Events policy, which is what makes it useless even
+when allow-listed.
 
-Until the upstream fix lands, treat `osascript` in a Bash command Claude wants to
-run as the sandbox asking to be let out, and do not auto-approve it.
+So this is a gap in what the *sandbox* enforces rather than in what this tool
+permits. Putting `osascript` on the allowlist hands it back whole, which is a
+reason not to, and a reason to treat a request to allow it as the sandbox asking
+to be let out.
 
-`tests/escape.test.ts` asserts the gap as it actually behaves, so it is reported
-on every run. If it ever closes, that test fails — which is the cue to promote it
-to a real denial assertion and delete this subsection.
+`tests/escape.test.ts` asserts both halves: denied by default, and still able to
+drive a running application once allow-listed. If the second ever closes, that
+test fails — which is the cue to promote it to a real denial assertion and delete
+this subsection.
 
 A fix for this is pending upstream: https://github.com/anthropics/sandbox-runtime/pull/557
+
+### An allow-listed interpreter is not a list
+
+`python3`, `node`, `bash` and `awk` run whatever they are handed. Selecting
+[node](#node) is the decision that JavaScript may run, not a decision about which
+JavaScript. The exec allowlist bounds *which programs start*; what one of them
+then does is bounded by the filesystem and domain policy alone.
+
+The same applies to a grant over a tree: [node-modules-exec](#node-modules-exec)
+covers files that arrive with a dependency update, and
+[workspace-exec](#workspace-exec) covers anything Claude writes.
 
 ## Development
 
@@ -474,9 +667,11 @@ A fix for this is pending upstream: https://github.com/anthropics/sandbox-runtim
     pnpm test   # builds first, then runs
 
 Behaviour tests only. Each one runs the real entry point with `CSB_CLAUDE=/bin/sh`
-and asserts what the sandboxed process can actually reach — nothing inspects the
-generated settings file. A domain being absent from an allowlist is not the claim;
-the sandboxed process failing to reach it is.
+and asserts what the sandboxed process can actually reach — not what the policy
+says. A domain being absent from an allowlist is not the claim; the sandboxed
+process failing to reach it is. The policy printed at startup is there to be
+read, and is deliberately not what these assert against: a rule can be present
+and still not bite.
 
 Fixtures go under `~/.cache/claude-seatbelt/test.XXXXXX`, one directory per run,
 removed on exit. Under `$HOME` on purpose: that is where a directory beside the
@@ -489,8 +684,13 @@ itself as the workspace, and leave their scratch file in the gitignored
 | ---- | ---- |
 | `tests/network.test.ts` | what the sandboxed process can reach: exact vs subdomain entries, lookalike suffixes, non-443 ports, proxy bypass, raw TCP, DNS, LAN addresses |
 | `tests/filesystem.test.ts` | what it can read and write: workspace, siblings, `.git`, `$HOME`, the keychains, the files `~/.claude.json` is rewritten through, `CSB_EXTRA_READ` |
+| `tests/exec.test.ts` | what it can start: an allow-listed binary, the same one through a shell and through a shell below that, a binary copied into the workspace, a symlinked entry, a subtree entry, `./` entries, a shebang script |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
-| `tests/profiles.test.ts` | what selecting `clipboard`, `gh`, `git-writable`, `node` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
+| `tests/profiles.test.ts` | what selecting `clipboard`, `gh`, `git`, `git-writable`, `node`, `node-modules-exec` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
+
+Every test sets `CSB_EXTRA_EXEC` to the toolbox its probes are built from. Without
+it a probe would report "denied" because `cat` could not start, whatever the
+policy under test says.
 
 Note that some tests are skipped when run under GitHub actions due to environment restrictions.

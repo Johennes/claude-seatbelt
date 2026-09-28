@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+import { SandboxManager, SandboxRuntimeConfigSchema } from "@anthropic-ai/sandbox-runtime";
 
 // Ensure the node version before anything else as the rest of this module leans
 // on it.
@@ -59,10 +61,10 @@ const BUILT_IN_PROFILES = path.join(import.meta.dirname, "..", "profiles.jsonc")
 
 /** Read environment variables and apply default values where needed. */
 const config = {
-  srtVersion: process.env["CSB_SRT_VERSION"] ?? "latest",
   extraDomains: words(process.env["CSB_EXTRA_DOMAINS"] ?? ""),
   extraRead: paths("CSB_EXTRA_READ"),
   extraWrite: paths("CSB_EXTRA_WRITE"),
+  extraExec: paths("CSB_EXTRA_EXEC", true),
   profiles: words(process.env["CSB_PROFILES"] ?? ""),
   unsetEnv: words(process.env["CSB_UNSET_ENV"] ?? ""),
   workspace: resolveDir(process.env["CSB_WORKSPACE"] || "."),
@@ -72,6 +74,7 @@ const config = {
     which("claude") ||
     die("'claude' not found in PATH (set CSB_CLAUDE)"),
   token: process.env["CLAUDE_CODE_OAUTH_TOKEN"] ?? "",
+  shell: loginShell(),
 } as const;
 
 /** Split a space-separated list the way the shell would, dropping empties. */
@@ -79,32 +82,38 @@ function words(value: string): string[] {
   return value.split(/\s+/).filter(Boolean);
 }
 
-/**
- * The paths in a colon-separated variable, PATH-style so that a path may hold a
- * space, with "~/" expanded. Each has to be absolute or under "~/", as a profile's
- * are; anything else stops the run.
- */
-function paths(variable: string): string[] {
+/** The paths in a colon-separated variable (PATH-style) with "~/" expanded. */
+function paths(variable: string, allowRelative = false): string[] {
   const entries = (process.env[variable] ?? "").split(":").filter(Boolean);
-  const rejections = entries.filter((entry) => !isPathEntry(entry));
+  const rejections = entries.filter((entry) => !isValidPathEntry(entry, allowRelative));
   if (rejections.length > 0) {
     for (const rejection of rejections) {
-      note(`${variable}: '${rejection}' is neither absolute nor under '~/'`);
+      note(`${variable}: '${rejection}' is ${validPathEntryForms(allowRelative)}`);
     }
     die(`refusing to run: ${rejections.length} invalid entry/entries in ${variable}`);
   }
   return entries.map(expandHome);
 }
 
-/** Whether a path reaches srt in a form it takes: absolute, or under "~/". */
-function isPathEntry(entry: string): boolean {
+/** Whether a path entry is valid (absolute, under $HOME or, if allowed, relative). */
+function isValidPathEntry(entry: string, allowRelative = false): boolean {
+  if (allowRelative && entry.startsWith("./")) return true;
   return entry.startsWith("/") || entry.startsWith("~/");
+}
+
+/** How a rejected path entry failed. */
+function validPathEntryForms(allowRelative: boolean): string {
+  return allowRelative
+    ? "neither absolute nor under '~/' or './'"
+    : "neither absolute nor under '~/";
 }
 
 /** Locate a binary from PATH. */
 function which(command: string): string | null {
   for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
-    if (!dir) continue;
+    // Only consider absolute entries to avoid accidentally resolving against
+    // the working directory.
+    if (!dir.startsWith("/")) continue;
     const candidate = path.join(dir, command);
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -114,6 +123,13 @@ function which(command: string): string | null {
     }
   }
   return null;
+}
+
+/** Determines this account's login shell by resolving $SHELL. */
+function loginShell(): string {
+  const shell = process.env["SHELL"] ?? "";
+  if (!shell) return "";
+  return shell.startsWith("/") ? shell : (which(shell) ?? "");
 }
 
 /** Resolve a directory, failing with one line rather than a stack trace. */
@@ -142,9 +158,11 @@ function note(message: string): void {
 }
 
 /** The ... well ... main function. */
-function main(): never {
-  // Ensure npx is available.
-  const npx = which("npx") ?? die("'npx' not found in PATH; it fetches sandbox-runtime");
+async function main(): Promise<never> {
+  // Ensure we can run on this platform.
+  if (!SandboxManager.isSupportedPlatform() || process.platform !== "darwin") {
+    die(`unsupported platform: ${process.platform}`);
+  }
 
   // Ensure we have a Claude token.
   ensureToken();
@@ -155,21 +173,10 @@ function main(): never {
     die(`refusing to run with ${config.workspace} as the workspace`);
   }
 
-  // Prepare a temporary directory for running srt and a clean-up handler.
-  const rundir = fs.mkdtempSync(path.join(config.tmpDir, "claude-seatbelt."));
-  let cleanedUp = false;
-  const cleanup = (): void => {
-    if (!cleanedUp) {
-      cleanedUp = true;
-      fs.rmSync(rundir, { recursive: true, force: true });
-    }
-  };
-  process.on("exit", cleanup);
-
   // Claude owns the terminal and handles Ctrl-C itself. A terminal-generated
   // signal goes to the whole foreground process group, so the child already has
-  // its own copy; these handlers only stop Node from dying first and skipping
-  // the cleanup above.
+  // its own copy; these handlers only stop Node from dying first and leaving
+  // srt's proxy and the child behind it unwound.
   process.on("SIGINT", () => {});
   process.on("SIGTERM", () => {});
   process.on("SIGHUP", () => {});
@@ -197,47 +204,68 @@ function main(): never {
     unsetEnv: config.unsetEnv,
   });
 
-  // Write the srt settings file.
-  const settingsPath = path.join(rundir, "srt-settings.json");
-  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  // Validate the srt settings before passing them on.
+  const parsed = SandboxRuntimeConfigSchema.safeParse(settings);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      note(`settings: ${issue.path.join(".")}: ${issue.message}`);
+    }
+    die(`refusing to run: ${parsed.error.issues.length} problem(s) in the generated settings`);
+  }
+
+  // Collect all allowed executable paths.
+  const allowExec = [
+    // The shell srt starts INSIDE the sandbox, which then starts Claude. Also
+    // what Claude itself falls back to for running commands when $SHELL is unset.
+    "/bin/bash",
+    // This account's login shell, which is what Claude runs commands with.
+    ...(config.shell ? [config.shell] : []),
+    // The (Claude) binary this run is pointed at.
+    config.claude,
+    // ~/.local/bin/claude symlinks into one of these directories. We allow-list
+    // the entire folder so that an in-place update does not lock the user out.
+    "~/.local/share/claude/versions/**",
+    // Whatever is explicitly requested through CSB_EXTRA_EXEC.
+    ...config.extraExec,
+    // Whatever the profiles selected through CSB_PROFILES add on top.
+    ...profiles.extraExec,
+  ];
 
   // Announce where and how we're running.
   note(`workspace ${config.workspace}`);
-  note(`settings ${settingsPath}`);
   if (config.unsetEnv.length > 0) {
     note(`unset ${config.unsetEnv.join(" ")}`);
   }
+  note(`srt settings: ${JSON.stringify(parsed.data, null, 2)}\n`);
+  note(`exec rules: ${buildExecRules(allowExec)}`);
 
-  // Spawn srt.
-  const result = spawnSync(
-    npx,
-    [
-      "--yes",
-      // Use the temporary running directory as prefix so that npm doesn't infer
-      // settings from the workspace for npx.
-      "--prefix",
-      rundir,
-      `@anthropic-ai/sandbox-runtime@${config.srtVersion}`,
-      "--settings",
-      settingsPath,
-      config.claude,
-      ...process.argv.slice(2),
-    ],
-    {
-      stdio: "inherit",
-      // Both srt and Claude have to start in the workspace. srt anchors its own mandatory
-      // write denies at its process.cwd().
-      cwd: config.workspace,
-      env: { ...process.env, DISABLE_AUTOUPDATER: "1" },
-    },
-  );
+  // Bring up the proxy and the rest of srt's session state.
+  await SandboxManager.initialize(parsed.data);
+
+  // Construct the plain shell command to launch the binary.
+  const command = quoteShellArgs([config.claude, ...process.argv.slice(2)]);
+
+  // Wrap the command to run in the sandbox. The shell argument is what srt launches
+  // inside the sandbox and has to be in the allowed executables injected below. We
+  // pick bash here because `bash -c` sources nothing and Claude falls back to bash
+  // when $SHELL cannot be resolved anyway.
+  const wrapped = await SandboxManager.wrapWithSandbox(command, "/bin/bash");
+
+  // Inject our own execution policy into the generated seatbelt profile. srt itself
+  // just emits a blanket `(allow process-exec)` which our spliced rules override to
+  // take precedence.
+  const sandboxed = spliceExecRules(wrapped, allowExec);
+
+  // Spawn it the combined command.
+  const result = await run("/bin/sh", ["-c", sandboxed]);
 
   // We're done, time to clean up.
-  cleanup();
+  SandboxManager.cleanupAfterCommand();
+  await SandboxManager.reset();
 
   // Re-raise if spawning failed with an error.
   if (result.error) {
-    die(`failed to run ${npx}: ${result.error.message}`);
+    die(`failed to run the sandboxed command: ${result.error.message}`);
   }
 
   // Report a signal death the way a shell would, so `$?` means the same thing
@@ -246,6 +274,32 @@ function main(): never {
     process.exit(128 + (os.constants.signals[result.signal] ?? 0));
   }
   process.exit(result.status ?? 1);
+}
+
+/** What a finished child process leaves behind, whichever way it ended. */
+interface RunResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: Error;
+}
+
+/** Run a command to completion without blocking the event loop the proxy runs on. */
+function run(file: string, args: string[]): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, {
+      stdio: "inherit",
+      // Both srt and Claude have to start in the workspace. srt anchors its own
+      // mandatory write denies at its process.cwd().
+      cwd: config.workspace,
+      env: { ...process.env, DISABLE_AUTOUPDATER: "1" },
+    });
+    child.on("error", (error) => {
+      resolve({ status: null, signal: null, error });
+    });
+    child.on("exit", (status, signal) => {
+      resolve({ status, signal });
+    });
+  });
 }
 
 /** Ensure that a token was supplied for Claude, or exit explaining how to get one. */
@@ -293,12 +347,14 @@ function isAtOrUnder(target: string, dir: string): boolean {
 interface Profile {
   /** One line, for the reader of the profiles file. */
   description?: string;
-  /** Appended to CSB_EXTRA_DOMAINS, and validated the same way. */
+  /** Appended to CSB_EXTRA_DOMAINS. */
   extraDomains?: string[];
   /** Appended to CSB_EXTRA_READ. */
   extraRead?: string[];
   /** Appended to CSB_EXTRA_WRITE. */
   extraWrite?: string[];
+  /** Appended to CSB_EXTRA_EXEC. */
+  extraExec?: string[];
   /** denyWrite entries to replace in the base policy. An empty list drops the entry outright. */
   denyWriteOverrides?: Record<string, string[]>;
   /** XPC/Mach services to open, srt's `network.allowMachLookup`. */
@@ -312,6 +368,7 @@ const PROFILE_LISTS = [
   "extraDomains",
   "extraRead",
   "extraWrite",
+  "extraExec",
   "allowMachLookup",
   "requiredEnv",
 ] as const;
@@ -321,6 +378,7 @@ interface ProfileAdditions {
   extraDomains: string[];
   extraRead: string[];
   extraWrite: string[];
+  extraExec: string[];
   denyWriteOverrides: Record<string, string[]>;
   allowMachLookup: string[];
   requiredEnv: string[];
@@ -338,6 +396,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     extraDomains: [],
     extraRead: [],
     extraWrite: [],
+    extraExec: [],
     denyWriteOverrides: {},
     allowMachLookup: [],
     requiredEnv: [],
@@ -360,6 +419,7 @@ function applyProfiles(profiles: string[]): ProfileAdditions {
     additions.extraDomains.push(...(profile.extraDomains ?? []));
     additions.extraRead.push(...(profile.extraRead ?? []).map(expandHome));
     additions.extraWrite.push(...(profile.extraWrite ?? []).map(expandHome));
+    additions.extraExec.push(...(profile.extraExec ?? []).map(expandHome));
 
     // The later profile wins on a key both name.
     Object.assign(additions.denyWriteOverrides, profile.denyWriteOverrides ?? {});
@@ -433,11 +493,16 @@ function readProfiles(file: string): Map<string, Profile> {
       profile[key as (typeof PROFILE_LISTS)[number]] = entry as string[];
     }
 
-    // Paths reach srt verbatim, and srt takes absolute paths and "~" only.
-    for (const key of ["extraRead", "extraWrite"] as const) {
+    // Paths reach srt verbatim, and srt takes absolute paths and "~" only. An
+    // extraExec entry never reaches srt — it is written into the Seatbelt
+    // profile here — so it may also be "./", the workspace this run was given.
+    for (const key of ["extraRead", "extraWrite", "extraExec"] as const) {
+      const allowRelative = key === "extraExec";
       for (const entry of profile[key] ?? []) {
-        if (!isPathEntry(entry)) {
-          rejections.push(`${where}: '${key}' entry '${entry}' is neither absolute nor under '~/'`);
+        if (!isValidPathEntry(entry, allowRelative)) {
+          rejections.push(
+            `${where}: '${key}' entry '${entry}' is ${validPathEntryForms(allowRelative)}`,
+          );
         }
       }
     }
@@ -817,4 +882,139 @@ function buildSrtSettings(opts: {
   };
 }
 
-main(); // 🚀
+/**
+ * Constructs the Seatbelt rules that close execution and then open it again for
+ * the supplied entries.
+ *
+ * An entry is a path to a binary, or a directory with "/**" after it for the
+ * whole tree below. Both the entry and what it resolves to are emitted. Seatbelt
+ * matches the path the kernel arrived at. For instance, /usr/bin/git is a shim that
+ * re-execs the real binary under /Library/Developer, and Homebrew command is a
+ * symlink into its Cellar.
+ *
+ * An entry starting with "./" is taken from the workspace. Nothing in there is
+ * executable by default — a file Claude wrote is a file Claude could run — so
+ * this is how a repository's own tooling is let through on purpose.
+ *
+ * Note that `process-exec*` is checked on every execve, in the sandboxed process
+ * and in every descendant of it. So allowing a shell does not influence what the
+ * shell can launch itself.
+ *
+ */
+function buildExecRules(entries: string[]): string {
+  const filters = new Set<string>();
+
+  for (const entry of entries) {
+    const expanded = entry.startsWith("./")
+      ? path.join(config.workspace, entry.slice(2))
+      : expandHome(entry);
+    const subtree = expanded.endsWith("/**");
+    const target = subtree ? expanded.slice(0, -3) : expanded;
+    for (const resolved of [target, realPath(target)]) {
+      filters.add(`(${subtree ? "subpath" : "literal"} ${sbplString(resolved)})`);
+    }
+  }
+
+  return ["", "(deny process-exec*)", `(allow process-exec* ${[...filters].join(" ")})`, ""].join(
+    "\n",
+  );
+}
+
+/** Where a path really is, or the path itself when it is not on this machine. */
+function realPath(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    // An allowlist entry for something not yet installed is no error.
+    return target;
+  }
+}
+
+/** A path as a Seatbelt string literal, which is double-quoted and backslash-escaped. */
+function sbplString(target: string): string {
+  return `"${target.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+/** Quote one argument so a POSIX shell parses it back to exactly these bytes. */
+function quoteShellArg(argument: string): string {
+  // Single quotes make every byte literal, so a quote is the only thing needing
+  // handling: close, emit an escaped quote, reopen.
+  return `'${argument.replaceAll("'", `'"'"'`)}'`;
+}
+
+/** Quote a whole argument list into one command string. */
+function quoteShellArgs(args: string[]): string {
+  return args.map(quoteShellArg).join(" ");
+}
+
+/**
+ * Append the exec rules to the Seatbelt profile inside srt's wrapped command.
+ *
+ * srt hands back a shell command of the form `env ... /usr/bin/sandbox-exec -p
+ * <profile> <shell> -c <command>`, with the profile as one single-quoted
+ * argument, and offers no way to influence the process rules it contains. So the
+ * argument is read back out, extended and re-quoted.
+ *
+ * Anything unexpected about the shape stops the run. A profile that silently
+ * failed to gain the rules would be a sandbox that permits every binary on the
+ * machine while reporting that it does not.
+ */
+function spliceExecRules(wrapped: string, entries: string[]): string {
+  const SANDBOX_EXEC = "/usr/bin/sandbox-exec -p ";
+  const marker = wrapped.indexOf(SANDBOX_EXEC);
+  if (marker < 0) {
+    die("sandbox-runtime did not produce a sandbox-exec command; refusing to run unsandboxed");
+  }
+
+  const start = marker + SANDBOX_EXEC.length;
+  const profile = readShellArg(wrapped, start);
+  if (!profile) {
+    die("cannot read the Seatbelt profile out of the sandbox-runtime command");
+  }
+  if (!profile.value.trimStart().startsWith("(version 1)")) {
+    die("what sandbox-runtime passes to sandbox-exec is not a Seatbelt profile");
+  }
+
+  const rules = buildExecRules(entries);
+  return (
+    wrapped.slice(0, start) + quoteShellArg(profile.value + rules) + wrapped.slice(profile.end)
+  );
+}
+
+/**
+ * Read one shell argument starting at `start`, and say where it ends. Only the
+ * two forms srt's quoting produces are understood: a single-quoted string, with
+ * `'"'"'` standing for a quote, and a bare word of characters that need none.
+ */
+function readShellArg(source: string, start: number): { value: string; end: number } | undefined {
+  if (source.charAt(start) !== "'") {
+    const end = source.indexOf(" ", start);
+    const word = source.slice(start, end < 0 ? undefined : end);
+    return word ? { value: word, end: start + word.length } : undefined;
+  }
+
+  let value = "";
+  let index = start + 1;
+  while (index < source.length) {
+    if (source.charAt(index) !== "'") {
+      value += source.charAt(index);
+      index++;
+      continue;
+    }
+    // A closing quote, either ending the argument or opening the `'"'"'` that
+    // stands in for a quote inside it.
+    if (source.startsWith(`'"'"'`, index)) {
+      value += "'";
+      index += 5;
+      continue;
+    }
+    return { value, end: index + 1 };
+  }
+
+  // Ran off the end without a closing quote.
+  return undefined;
+}
+
+main().catch((error: unknown) => {
+  die(error instanceof Error ? error.message : String(error));
+});

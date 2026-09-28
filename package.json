@@ -34,5 +34,8 @@
     "oxlint": "1.83.0",
     "typescript": "^5.9.3"
   },
-  "packageManager": "pnpm@11.23.0"
+  "packageManager": "pnpm@11.23.0",
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.77"
+  }
 }

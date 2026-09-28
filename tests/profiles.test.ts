@@ -364,7 +364,7 @@ describe("the git-writable profile", { skip: skipUnlessGitPresent() }, () => {
     sandbox = sandboxProbe({
       extraDomains: "",
       cwd: repo,
-      env: { CSB_PROFILES: "git-writable" },
+      env: { CSB_PROFILES: "git git-writable" },
       script: [
         `p git_add    'echo two > new.txt && git add new.txt'`,
         `p git_commit 'git ${gitIdentity} commit -q -m probe'`,
@@ -494,7 +494,7 @@ describe("the git-writable and gh profiles together", { skip: skipUnlessGitPrese
     sandbox = sandboxProbe({
       extraDomains: "",
       cwd: repo,
-      env: { ...token, CSB_PROFILES: "gh git-writable" },
+      env: { ...token, CSB_PROFILES: "gh git git-writable" },
       script: [
         `p git_commit 'echo two > new.txt && git add new.txt && git ${gitIdentity} commit -q -m probe'`,
         `p reach_api  'curl -sS -o /dev/null --max-time 15 https://api.github.com'`,
@@ -537,7 +537,7 @@ describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
     sandbox = sandboxProbe({
       extraDomains: "",
       cwd: repoRoot,
-      env: { CSB_PROFILES: "node" },
+      env: { CSB_PROFILES: "node node-modules-exec" },
       script: [
         `p pnpm_resolves 'command -v pnpm'`,
         // The base deny, which this profile no longer lifts. That is
@@ -615,7 +615,7 @@ describe("the node-modules-writable profile", () => {
     sandbox = sandboxProbe({
       extraDomains: "",
       cwd: repoRoot,
-      env: { CSB_PROFILES: "node node-modules-writable" },
+      env: { CSB_PROFILES: "node node-modules-exec node-modules-writable" },
       script: [
         `p write_vite_temp 'touch node_modules/.vite-temp/probe.mjs'`,
         // srt cannot deny a path inside a region it has opened, so the whole of

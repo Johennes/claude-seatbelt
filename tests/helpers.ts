@@ -40,13 +40,19 @@ export interface SandboxOptions {
 
 /** Result of calling the binary. */
 export class SandboxResult {
-  /** Everything the invocation wrote, stdout and stderr together. */
+  /** What the invocation wrote to STDOUT, which belongs to the sandboxed command. */
+  readonly stdout: string;
+  /** What it wrote to STDERR, where this tool says everything it has to say. */
+  readonly stderr: string;
+  /** Both together, for a claim that does not care which stream carried it. */
   readonly output: string;
   /** The exit status, or null if the process died from a signal. */
   readonly status: number | null;
 
-  constructor(output: string, status: number | null) {
-    this.output = output;
+  constructor(stdout: string, stderr: string, status: number | null) {
+    this.stdout = stdout;
+    this.stderr = stderr;
+    this.output = `${stdout}${stderr}`;
     this.status = status;
   }
 
@@ -92,13 +98,58 @@ const PROBE_PRELUDE = `p() {
 /** Whether the sandboxed process could reach the thing, or why we cannot say. */
 export type ProbeResult = "allowed" | "denied" | "timeout" | "missing";
 
+/**
+ * What every test may execute, on top of the base allowlist.
+ *
+ * Execution is denied by default, so a probe that runs `cat` on a denied file
+ * would otherwise report "denied" whatever the filesystem policy says, and the
+ * probes that must come back "allowed" could not pass at all. These are the
+ * commands the probes themselves are built from — `sleep`, which the timeout
+ * loop needs, among them. A test about the exec allowlist sets CSB_EXTRA_EXEC
+ * to something of its own instead.
+ */
+export const PROBE_EXEC = [
+  "/bin/cat",
+  "/bin/ls",
+  "/bin/mkdir",
+  "/bin/rmdir",
+  "/bin/rm",
+  "/bin/cp",
+  "/bin/mv",
+  "/bin/ln",
+  "/bin/echo",
+  "/bin/sleep",
+  "/bin/date",
+  "/bin/chmod",
+  "/bin/test",
+  "/usr/bin/touch",
+  "/usr/bin/head",
+  "/usr/bin/tail",
+  "/usr/bin/find",
+  "/usr/bin/grep",
+  "/usr/bin/env",
+  "/usr/bin/which",
+  "/usr/bin/printf",
+  "/usr/bin/stat",
+  "/usr/bin/true",
+  "/usr/bin/false",
+  // The probes for the boundaries themselves: the network, the keychain and the
+  // pasteboard. Being able to start them is what lets a test tell a denial from
+  // a missing command.
+  "/usr/bin/curl",
+  "/usr/bin/nc",
+  "/usr/bin/security",
+  "/usr/bin/pbcopy",
+  "/usr/bin/pbpaste",
+].join(":");
+
 /** Run one claude-seatbelt invocation and collect everything it wrote. */
 export function sandboxRun(options: SandboxOptions): SandboxResult {
   const result = spawnSync(process.execPath, [entryPoint, "-c", options.script], {
     cwd: options.cwd,
     encoding: "utf8",
-    // Long enough for an npx fetch of srt plus a 15s probe cap, short enough
-    // that a genuine hang fails the run instead of stalling it.
+    // Long enough for srt to bring its proxy up plus a 15s probe cap, short
+    // enough that a genuine hang fails the run instead of stalling it.
     timeout: 180_000,
     env: {
       ...process.env,
@@ -111,6 +162,7 @@ export function sandboxRun(options: SandboxOptions): SandboxResult {
       CSB_EXTRA_READ: "",
       CSB_EXTRA_WRITE: "",
       CSB_UNSET_ENV: "",
+      CSB_EXTRA_EXEC: PROBE_EXEC,
       CSB_EXTRA_DOMAINS: options.extraDomains,
       CSB_CLAUDE: "/bin/sh",
       // Required, and never actually authenticated against: CSB_CLAUDE is
@@ -120,7 +172,7 @@ export function sandboxRun(options: SandboxOptions): SandboxResult {
       ...options.env,
     },
   });
-  return new SandboxResult(`${result.stdout ?? ""}${result.stderr ?? ""}`, result.status);
+  return new SandboxResult(result.stdout ?? "", result.stderr ?? "", result.status);
 }
 
 /** Run a probe script, with the `p` helper already defined. */

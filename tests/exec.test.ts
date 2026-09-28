@@ -1,0 +1,423 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { before, describe, it } from "node:test";
+
+import {
+  makeDir,
+  type SandboxResult,
+  sandboxProbe,
+  sandboxRun,
+  skipUnlessPresent,
+  writeFile,
+} from "./helpers.ts";
+
+const SENTINEL = "SENTINEL_RAN";
+
+// Every probe script runs under a timeout loop built on `sleep`, so a suite that
+// replaces the default allowlist has to keep it. Without it a denial reads as a
+// timeout, which is a different claim.
+const SLEEP = "/bin/sleep";
+
+/** Run probes with an allowlist of exactly these entries, plus what the loop needs. */
+function probeWithExec(cwd: string, allowExec: string[], script: string): SandboxResult {
+  return sandboxProbe({
+    extraDomains: "",
+    cwd,
+    script,
+    env: { CSB_EXTRA_EXEC: [SLEEP, ...allowExec].join(":") },
+  });
+}
+
+describe("the exec allowlist", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-ws");
+
+  before(() => {
+    // A binary of its own inside the workspace: the workspace is writable, so
+    // this is the file Claude could have written itself.
+    fs.copyFileSync("/bin/date", path.join(workspace, "copied-date"));
+
+    sandbox = probeWithExec(
+      workspace,
+      ["/bin/date"],
+      [
+        `p allowed       '/bin/date'`,
+        `p denied        '/bin/echo hello'`,
+        // The same denial, reached through the shell that is on the list. A
+        // shell is not a way around the allowlist: the binary it starts is
+        // checked in its own right.
+        `p denied_via_sh '/bin/sh -c /bin/echo'`,
+        // And through a second shell below that one.
+        `p denied_nested 'sh -c "sh -c /bin/echo"'`,
+        `p copied_binary './copied-date'`,
+      ].join("\n"),
+    );
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("an allow-listed binary runs", () => {
+    assert.equal(sandbox.probe("allowed"), "allowed");
+  });
+
+  it("a binary that is not allow-listed does not", () => {
+    assert.equal(sandbox.probe("denied"), "denied");
+  });
+
+  it("a shell cannot start what the allowlist denies", () => {
+    assert.equal(sandbox.probe("denied_via_sh"), "denied");
+  });
+
+  it("nor can a shell below that one", () => {
+    assert.equal(sandbox.probe("denied_nested"), "denied");
+  });
+
+  // The point of the exercise: the workspace is the one place Claude can write,
+  // and writing something is not the same as being able to run it.
+  it("a binary copied into the workspace does not run", () => {
+    assert.equal(sandbox.probe("copied_binary"), "denied");
+  });
+});
+
+describe("what an entry resolves to", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-resolve-ws");
+  // In the workspace, which is the one region a test can put a file in and have
+  // the sandbox able to read it back.
+  const link = path.join(workspace, "date-link");
+
+  before(() => {
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync("/bin/date", link);
+    sandbox = probeWithExec(
+      workspace,
+      [link],
+      [
+        // Seatbelt matches the path the kernel resolved, so allow-listing the
+        // symlink alone would deny the binary behind it.
+        `p through_link '${link}'`,
+        // Naming the link does not open the directory it points into.
+        `p not_the_dir  '/bin/ls /'`,
+      ].join("\n"),
+    );
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("a symlinked entry runs the binary it points at", () => {
+    assert.equal(sandbox.probe("through_link"), "allowed");
+  });
+
+  it("and nothing else beside it", () => {
+    assert.equal(sandbox.probe("not_the_dir"), "denied");
+  });
+});
+
+describe("a subtree entry", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-subtree-ws");
+
+  before(() => {
+    sandbox = probeWithExec(
+      workspace,
+      ["/bin/**"],
+      [
+        `p in_tree     '/bin/date'`,
+        `p also_in_tree '/bin/echo tree'`,
+        `p out_of_tree '/usr/bin/true'`,
+      ].join("\n"),
+    );
+  });
+
+  it("opens every binary below it", () => {
+    assert.equal(sandbox.probe("in_tree"), "allowed");
+    assert.equal(sandbox.probe("also_in_tree"), "allowed");
+  });
+
+  it("and nothing outside it", () => {
+    assert.equal(sandbox.probe("out_of_tree"), "denied");
+  });
+});
+
+describe("workspace-relative entries", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-relative-ws");
+
+  before(() => {
+    const tool = path.join(workspace, "tools", "run.sh");
+    writeFile(tool, "#!/bin/sh\necho SCRIPT_RAN\n");
+    fs.chmodSync(tool, 0o755);
+    fs.copyFileSync("/bin/date", path.join(workspace, "tools", "date"));
+    fs.copyFileSync("/bin/date", path.join(workspace, "elsewhere-date"));
+
+    sandbox = probeWithExec(
+      workspace,
+      ["./tools/**", "/bin/sh"],
+      [
+        `p in_workspace     './tools/date'`,
+        // A script is two execs: the file itself, and the interpreter its
+        // shebang names. Both are on the list here, so the grant over the
+        // directory is what decides.
+        `p workspace_script './tools/run.sh'`,
+        `p outside_the_grant './elsewhere-date'`,
+      ].join("\n"),
+    );
+  });
+
+  it("a './' entry is taken from the workspace", () => {
+    assert.equal(sandbox.probe("in_workspace"), "allowed");
+  });
+
+  it("a script in the granted directory runs", () => {
+    assert.equal(sandbox.probe("workspace_script"), "allowed");
+  });
+
+  it("the rest of the workspace stays closed", () => {
+    assert.equal(sandbox.probe("outside_the_grant"), "denied");
+  });
+});
+
+describe("a script in the workspace, with nothing granted over it", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-script-ws");
+
+  before(() => {
+    const script = path.join(workspace, "build.sh");
+    writeFile(script, "#!/bin/sh\necho SCRIPT_RAN\n");
+    fs.chmodSync(script, 0o755);
+
+    sandbox = probeWithExec(
+      workspace,
+      ["/bin/sh"],
+      [
+        `p shebang     './build.sh'`,
+        // The same file handed to the interpreter as an argument. The shell is
+        // allow-listed and the script is only ever read, so this does run: the
+        // allowlist is about which binaries start, not about which bytes they
+        // are pointed at.
+        `p interpreted 'sh ./build.sh'`,
+      ].join("\n"),
+    );
+  });
+
+  it("cannot be run through its shebang", () => {
+    assert.equal(sandbox.probe("shebang"), "denied");
+  });
+
+  it("but an allow-listed interpreter still reads it", () => {
+    assert.equal(sandbox.probe("interpreted"), "allowed");
+  });
+});
+
+// The base list is what runs with no profile selected. It is the shells Claude
+// needs and the Claude binary, and deliberately not /bin/sh: nothing Claude does
+// on its own reaches for it, while `pnpm test` and every `#!/bin/sh` script do —
+// which is a profile's business rather than the base policy's.
+describe("the base list", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-base-ws");
+
+  before(() => {
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      // Not the /bin/sh the other suites use: CSB_CLAUDE is allow-listed for
+      // execution, which would grant the very thing under test here.
+      env: { CSB_CLAUDE: "/bin/bash", CSB_EXTRA_EXEC: SLEEP },
+      script: [`p bash '/bin/bash -c "exit 0"'`, `p sh '/bin/sh -c "exit 0"'`].join("\n"),
+    });
+  });
+
+  it("carries the shell Claude falls back to", () => {
+    assert.equal(sandbox.probe("bash"), "allowed");
+  });
+
+  it("does not carry /bin/sh", () => {
+    assert.equal(sandbox.probe("sh"), "denied");
+  });
+
+  it("which the unix profile grants", () => {
+    const withUnix = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      env: { CSB_CLAUDE: "/bin/bash", CSB_EXTRA_EXEC: SLEEP, CSB_PROFILES: "unix" },
+      script: `p sh '/bin/sh -c "exit 0"'`,
+    });
+    assert.equal(withUnix.probe("sh"), "allowed");
+  });
+});
+
+// The login shell is the one Claude runs a command with, and it is read rather
+// than assumed. /bin/zsh stands in for it here because it is on every macOS and
+// on no other list, so allowed-vs-denied is this grant and nothing else.
+describe("the login shell", { skip: skipUnlessPresent("/bin/zsh") }, () => {
+  const workspace = makeDir("exec-shell-ws");
+  const script = `p login_shell '/bin/zsh -c "exit 0"'`;
+
+  const withShell = (shell: string): SandboxResult =>
+    sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      script,
+      env: { CSB_EXTRA_EXEC: SLEEP, SHELL: shell },
+    });
+
+  it("is allow-listed from $SHELL", () => {
+    assert.equal(withShell("/bin/zsh").probe("login_shell"), "allowed");
+  });
+
+  it("is not assumed when $SHELL says otherwise", () => {
+    assert.equal(withShell("/bin/bash").probe("login_shell"), "denied");
+  });
+
+  it("nor when $SHELL is unset", () => {
+    assert.equal(withShell("").probe("login_shell"), "denied");
+  });
+
+  // $SHELL is an absolute path on every macOS account, POSIX says so, and a bare
+  // name is a broken environment rather than a hostile one. It is resolved the
+  // way the sandboxed process would have to resolve it.
+  it("is resolved on PATH when $SHELL is a bare name", () => {
+    const sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      script,
+      env: { CSB_EXTRA_EXEC: SLEEP, SHELL: "zsh", PATH: "/bin:/usr/bin" },
+    });
+    assert.equal(sandbox.probe("login_shell"), "allowed");
+  });
+
+  it("and a name that is on no PATH is passed over rather than refused", () => {
+    const sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      script,
+      env: { CSB_EXTRA_EXEC: SLEEP, SHELL: "no-such-shell" },
+    });
+    assert.equal(sandbox.status, 0);
+    assert.equal(sandbox.probe("login_shell"), "denied");
+  });
+});
+
+// What `which` answers is executed, and is allow-listed for execution so that it
+// can be. A relative PATH entry would let the workspace answer that question,
+// and the workspace is the one place the sandboxed Claude can write.
+describe("finding claude on PATH", () => {
+  const workspace = makeDir("exec-which-ws");
+  const script = `echo ${SENTINEL}`;
+
+  before(() => {
+    // Something that behaves like Claude for the length of one `-c`. A script
+    // rather than a copied /bin/sh: macOS launch constraints SIGKILL a system
+    // shell that runs from anywhere but its own path, sandbox or no sandbox.
+    const fake = path.join(workspace, "claude");
+    writeFile(fake, '#!/bin/bash\nexec /bin/bash "$@"\n');
+    fs.chmodSync(fake, 0o755);
+  });
+
+  it("an absolute PATH entry answers", () => {
+    const sandbox = sandboxRun({
+      extraDomains: "",
+      cwd: workspace,
+      script,
+      env: { CSB_CLAUDE: "", PATH: `${workspace}:/usr/bin:/bin` },
+    });
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+  });
+
+  it("a relative one does not, even with the binary right there", () => {
+    const sandbox = sandboxRun({
+      extraDomains: "",
+      cwd: workspace,
+      script,
+      env: { CSB_CLAUDE: "", PATH: ".:/usr/bin:/bin" },
+    });
+    assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+    assert.ok(
+      sandbox.printed("not found in PATH"),
+      `expected the refusal to say so, got:\n${sandbox.output}`,
+    );
+  });
+});
+
+describe("the workspace-exec profile", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-profile-ws");
+
+  before(() => {
+    fs.copyFileSync("/bin/date", path.join(workspace, "copied-date"));
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      env: { CSB_PROFILES: "workspace-exec", CSB_EXTRA_EXEC: SLEEP },
+      script: [`p copied_binary './copied-date'`, `p still_denied  '/bin/echo hello'`].join("\n"),
+    });
+  });
+
+  it("opens the workspace for execution", () => {
+    assert.equal(sandbox.probe("copied_binary"), "allowed");
+  });
+
+  it("and leaves the rest of the machine as it was", () => {
+    assert.equal(sandbox.probe("still_denied"), "denied");
+  });
+});
+
+describe("the unix profile", { skip: skipUnlessPresent("/usr/bin/sed", "/bin/ls") }, () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-unix-ws");
+
+  before(() => {
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      env: { CSB_PROFILES: "unix", CSB_EXTRA_EXEC: "" },
+      script: [
+        `p toolbox 'ls / | sed -n 1p'`,
+        // Not in the toolbox, and the profile is not a way to get at it.
+        `p curl    'curl --version'`,
+        `p python  'python3 -c "print(1)"'`,
+      ].join("\n"),
+    });
+  });
+
+  it("brings the everyday commands", () => {
+    assert.equal(sandbox.probe("toolbox"), "allowed");
+  });
+
+  it("without bringing curl", () => {
+    assert.equal(sandbox.probe("curl"), "denied");
+  });
+
+  it("or an interpreter", () => {
+    assert.equal(sandbox.probe("python"), "denied");
+  });
+});
+
+describe("CSB_EXTRA_EXEC entries that must stop the run", () => {
+  const workspace = makeDir("exec-invalid-ws");
+  const cases: Array<[label: string, value: string]> = [
+    ["a bare command name", "date"],
+    ["a relative path without './'", "tools/date"],
+    ["a bare tilde", "~"],
+    ["one bad entry among good ones", "/bin/date:date"],
+  ];
+
+  for (const [label, value] of cases) {
+    it(`${label} stops the run`, () => {
+      const sandbox = sandboxRun({
+        extraDomains: "",
+        cwd: workspace,
+        script: `echo ${SENTINEL}`,
+        env: { CSB_EXTRA_EXEC: value },
+      });
+      assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
+      assert.notEqual(sandbox.status, 0);
+    });
+  }
+});

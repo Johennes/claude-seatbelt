@@ -4,6 +4,10 @@
     "extraDomains": [],
     "extraRead": [],
     "extraWrite": [],
+    "extraExec": [
+      "/usr/bin/pbcopy",
+      "/usr/bin/pbpaste"
+    ],
     "allowMachLookup": [
       // The pasteboard server. Without it pbcopy exits 1, and Claude reports a
       // successful copy regardless: it spawns pbcopy without awaiting it.
@@ -12,6 +16,20 @@
       // whatever is on the host clipboard is readable inside the sandbox.
       "com.apple.pasteboard.1"
     ],
+    "requiredEnv": []
+  },
+  "curl": {
+    "description": "curl, bounded by the domain allowlist like every other request out of the sandbox.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
+    "extraExec": [
+      "/usr/bin/curl",
+      // Homebrew's, which is what PATH finds first where it is installed.
+      "/opt/homebrew/bin/curl",
+      "/usr/local/bin/curl"
+    ],
+    "allowMachLookup": [],
     "requiredEnv": []
   },
   "gh": {
@@ -27,6 +45,14 @@
       "~/.config/gh"
     ],
     "extraWrite": [],
+    "extraExec": [
+      // Homebrew's install, and the same binary where an Intel machine puts it.
+      // The Cellar path each is a symlink to is resolved at startup.
+      "/opt/homebrew/bin/gh",
+      "/usr/local/bin/gh"
+      // `gh pr checkout` and friends shell out to git. Select 'git' beside this
+      // one for those.
+    ],
     "allowMachLookup": [
       // gh is a Go binary, and Go on macOS verifies TLS through the Security
       // framework rather than a CA bundle, so without this every request fails
@@ -40,13 +66,40 @@
       "GH_TOKEN"
     ]
   },
+  "git": {
+    "description": "Running git at all — status, log, diff, show. Writing to .git stays denied.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
+    "extraExec": [
+      // The shim in /usr/bin, which is not a symlink: it re-execs the real
+      // binary under whichever developer tools are selected, so those are named
+      // here too or every git invocation stops at the second exec.
+      "/usr/bin/git",
+      "/Library/Developer/CommandLineTools/usr/bin/git",
+      "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+      // git dispatches subcommands to its own helper binaries — git-remote-https
+      // for a fetch, git-sh-setup for the shell-based ones — and finds them
+      // beside itself in libexec.
+      "/Library/Developer/CommandLineTools/usr/libexec/git-core/**",
+      "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/**",
+      // Homebrew's git, which takes precedence on PATH where it is installed.
+      "/opt/homebrew/bin/git",
+      "/opt/homebrew/opt/git/libexec/git-core/**",
+      "/usr/local/bin/git",
+      "/usr/local/opt/git/libexec/git-core/**"
+    ],
+    "allowMachLookup": [],
+    "requiredEnv": []
+  },
   "git-writable": {
-    "description": "Local git writes — add, commit, branch, stash, rebase. Push remains denied.",
+    "description": "Local git writes — add, commit, branch, stash, rebase. Push remains denied. Select it beside 'git'.",
     "extraDomains": [
       // github.com is *not* allow-listed, so pushes won't work.
     ],
     "extraRead": [],
     "extraWrite": [],
+    "extraExec": [],
     "denyWriteOverrides": {
       "**/.git": [
         // srt's own mandatory denies close .git/hooks and .git/config in the
@@ -92,6 +145,78 @@
       "~/.cache/node"
     ],
     "extraWrite": [],
+    "extraExec": [
+      // The same installations, now for running rather than reading. Whole trees
+      // rather than the handful of names in each bin/: a version manager holds
+      // one tree per installed version, and a globally installed package puts
+      // its own entry point in there beside node.
+      //
+      // node is an interpreter, so this grant is not a list of what may run: it
+      // is the decision that JavaScript may run at all, with the filesystem and
+      // the domain allowlist as the boundary that remains.
+      // A shebang is an exec of its own: `#!/usr/bin/env node`, which npm, npx,
+      // pnpm and most installed tools start with, is checked against this list
+      // before node is ever reached.
+      "/usr/bin/env",
+      // What a package manager runs a script with: `pnpm test` is `/bin/sh -c
+      // '<the script>'`, and npm and yarn do the same. Denied, it surfaces as
+      // `Error: spawn EPERM` from inside the package manager, naming no shell.
+      // The `#!/bin/sh` at the top of every shim in a node_modules/.bin is the
+      // same grant.
+      "/bin/sh",
+      // What the shell shims in a node_modules/.bin write themselves out of:
+      // they resolve their own directory before handing over to node, and a
+      // denied one leaves them computing paths from an empty string rather than
+      // failing outright.
+      "/usr/bin/dirname",
+      "/usr/bin/basename",
+      "/usr/bin/readlink",
+      "/usr/bin/sed",
+      "/usr/bin/uname",
+      "~/.nvm/versions/node/**",
+      "~/.config/nvm/versions/node/**",
+      "~/.nodenv/**",
+      "~/.local/share/pnpm/**",
+      "~/Library/pnpm/**",
+      "~/.npm-global/bin/**",
+      "~/.npm-global/lib/node_modules/**",
+      "~/.npm-packages/bin/**",
+      "~/.npm-packages/lib/node_modules/**",
+      "~/.cache/node/**",
+      // Homebrew's node, for an installation that does not use a version
+      // manager at all.
+      "/opt/homebrew/bin/node",
+      "/opt/homebrew/bin/npm",
+      "/opt/homebrew/bin/npx",
+      "/opt/homebrew/bin/pnpm",
+      "/opt/homebrew/bin/yarn",
+      "/opt/homebrew/lib/node_modules/**",
+      "/usr/local/bin/node",
+      "/usr/local/bin/npm",
+      "/usr/local/bin/npx",
+      "/usr/local/bin/pnpm",
+      "/usr/local/bin/yarn",
+      "/usr/local/lib/node_modules/**"
+    ],
+    "allowMachLookup": [],
+    "requiredEnv": []
+  },
+  "node-modules-exec": {
+    "description": "The workspace's own installed tools — what `pnpm test` and `npm run` reach for. Select it beside 'node'.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
+    "extraExec": [
+      // node_modules as a whole rather than .bin alone: every name in .bin is a
+      // symlink into the package that provides it, and Seatbelt matches the path
+      // the kernel resolved rather than the one that was typed. With pnpm that
+      // target is another level down again, under node_modules/.pnpm.
+      //
+      // This is a grant over files a dependency update rewrites without anyone
+      // reading them. It is what running the repository's tests costs, and it is
+      // a separate profile so that it is chosen rather than inherited.
+      "./node_modules/**"
+    ],
     "allowMachLookup": [],
     "requiredEnv": []
   },
@@ -100,10 +225,122 @@
     "extraDomains": [],
     "extraRead": [],
     "extraWrite": [],
+    "extraExec": [],
     "denyWriteOverrides": {
       // Open up node_modules entirely.
       "**/node_modules": []
     },
+    "allowMachLookup": [],
+    "requiredEnv": []
+  },
+  "workspace-exec": {
+    "description": "Anything in the workspace — ./gradlew, ./scripts/build.sh, a checked-in binary.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
+    "extraExec": [
+      // The workspace is writable, so this says that whatever Claude puts there
+      // may also be run: a script it wrote this minute, or a binary it fetched
+      // from an allow-listed host. What that code can then reach is still the
+      // filesystem and domain policy and nothing more, but the exec allowlist
+      // stops being a list at this point.
+      "./**",
+      // The interpreter a script names is a second exec, and checked separately.
+      // `#!/bin/bash` needs nothing — it is allowed without any profile — while
+      // `#!/bin/sh`, which is the more common of the two, would otherwise fail
+      // here as `bad interpreter: Operation not permitted`.
+      "/bin/sh"
+    ],
+    "allowMachLookup": [],
+    "requiredEnv": []
+  },
+  "unix": {
+    "description": "The everyday command line toolbox. Most sessions want this one.",
+    "extraDomains": [],
+    "extraRead": [],
+    "extraWrite": [],
+    "extraExec": [
+      // The shell a script names in its `#!/bin/sh` line, and the one every
+      // popen() and system() call in a C program lands on. Scripting is part of
+      // this toolbox; /bin/bash is allowed without any profile, /bin/sh is not.
+      "/bin/sh",
+      // Files and directories.
+      "/bin/ls",
+      "/bin/cat",
+      "/bin/cp",
+      "/bin/mv",
+      "/bin/rm",
+      "/bin/ln",
+      "/bin/mkdir",
+      "/bin/rmdir",
+      "/bin/pwd",
+      "/bin/chmod",
+      "/bin/df",
+      "/usr/bin/touch",
+      "/usr/bin/stat",
+      "/usr/bin/file",
+      "/usr/bin/du",
+      "/usr/bin/find",
+      "/usr/bin/basename",
+      "/usr/bin/dirname",
+      "/usr/bin/mktemp",
+      // Text.
+      "/usr/bin/grep",
+      "/usr/bin/egrep",
+      "/usr/bin/fgrep",
+      "/usr/bin/zgrep",
+      "/usr/bin/sed",
+      "/usr/bin/awk",
+      "/usr/bin/cut",
+      "/usr/bin/paste",
+      "/usr/bin/sort",
+      "/usr/bin/uniq",
+      "/usr/bin/comm",
+      "/usr/bin/head",
+      "/usr/bin/tail",
+      "/usr/bin/tr",
+      "/usr/bin/wc",
+      "/usr/bin/nl",
+      "/usr/bin/od",
+      "/usr/bin/xxd",
+      "/usr/bin/strings",
+      "/usr/bin/column",
+      "/usr/bin/expand",
+      "/usr/bin/split",
+      "/usr/bin/tee",
+      "/usr/bin/diff",
+      "/usr/bin/cmp",
+      "/usr/bin/patch",
+      "/usr/bin/less",
+      "/usr/bin/base64",
+      // Shell plumbing that is a binary rather than a builtin. xargs and `find
+      // -exec` start other programs, and each of those starts is checked against
+      // this same allowlist, so neither widens it.
+      "/usr/bin/env",
+      "/usr/bin/xargs",
+      "/usr/bin/which",
+      "/usr/bin/printf",
+      "/bin/echo",
+      "/bin/test",
+      "/bin/expr",
+      "/bin/kill",
+      "/bin/sleep",
+      "/bin/date",
+      "/usr/bin/seq",
+      "/usr/bin/jot",
+      "/usr/bin/id",
+      "/usr/bin/whoami",
+      "/bin/hostname",
+      "/usr/bin/uname",
+      "/usr/bin/sw_vers",
+      "/bin/stty",
+      // Archives.
+      "/usr/bin/tar",
+      "/usr/bin/gzip",
+      "/usr/bin/gunzip",
+      "/usr/bin/unzip",
+      "/usr/bin/zip"
+    ],
     "allowMachLookup": [],
     "requiredEnv": []
   }

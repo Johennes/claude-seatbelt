@@ -119,6 +119,52 @@ describe("CLAUDE_CODE_OAUTH_TOKEN", () => {
   });
 });
 
+// The policy is built in this process and handed to srt as an object, so what is
+// printed on the way past is the only way to read one. It is not what the other
+// suites assert against — a rule can be present and still not bite — so the
+// claims here are that it is printed, and that it stays out of Claude's way.
+describe("the policy it prints", () => {
+  it("names srt's settings and the exec rules", () => {
+    const sandbox = run("example.com");
+    assert.ok(
+      sandbox.printed(`"allowedDomains"`),
+      `expected srt's settings, got:\n${sandbox.output}`,
+    );
+    assert.ok(
+      sandbox.printed("(deny process-exec*)"),
+      `expected the exec rules, got:\n${sandbox.output}`,
+    );
+  });
+
+  // STDOUT belongs to Claude: `claude -p` piped into something else must not find
+  // the policy in front of the answer.
+  it("goes to STDERR, leaving STDOUT to Claude", () => {
+    const sandbox = run("example.com");
+    assert.ok(
+      sandbox.stdout.includes(SENTINEL),
+      `expected the sandboxed output on STDOUT, got:\n${sandbox.stdout}`,
+    );
+    assert.ok(
+      !sandbox.stdout.includes("(deny process-exec*)"),
+      `expected no policy on STDOUT, got:\n${sandbox.stdout}`,
+    );
+    assert.ok(
+      sandbox.stderr.includes("(deny process-exec*)"),
+      `expected the policy on STDERR, got:\n${sandbox.stderr}`,
+    );
+  });
+
+  // A refusal comes before the policy a broken configuration would describe.
+  it("is not printed for a configuration that cannot run", () => {
+    const sandbox = run("example.com", workspace, { CSB_EXTRA_READ: "relative/dir" });
+    assert.notEqual(sandbox.status, 0);
+    assert.ok(
+      !sandbox.printed("(deny process-exec*)"),
+      `expected no policy, got:\n${sandbox.output}`,
+    );
+  });
+});
+
 describe("CSB_UNSET_ENV", () => {
   // `-unset` rather than `:-unset`: a variable that is set but empty must still
   // read as present, or an empty string could pass for withheld.
@@ -170,9 +216,10 @@ describe("awkward characters in CSB_EXTRA_READ and CSB_EXTRA_WRITE", () => {
   });
 });
 
-// npx is npm, and npm reads the manifest of whatever directory it starts in.
 // A workspace is entitled to demand a particular package manager of its own
-// contributors, and that is no statement about the tool sandboxing it.
+// contributors, and that is no statement about the tool sandboxing it. Nothing
+// reads the manifest any more — sandbox-runtime is a dependency rather than an
+// `npx` fetch — so this is a guard against that coming back.
 describe("a workspace that demands another package manager", () => {
   it("still runs", () => {
     const cwd = makeDir("devengines-ws");
