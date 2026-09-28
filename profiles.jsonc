@@ -135,7 +135,7 @@
     "requiredEnv": []
   },
   "node": {
-    "description": "Node toolchains installed under $HOME, so package scripts run in the workspace.",
+    "description": "Node toolchains installed under $HOME, so package scripts run in the workspace. With nvm, select 'unix' beside it.",
     "extraDomains": [],
     "extraRead": [
       // nvm. Each version lands in versions/node/<version>, with that version's
@@ -232,7 +232,11 @@
       // This is a grant over files a dependency update rewrites without anyone
       // reading them. It is what running the repository's tests costs, and it is
       // a separate profile so that it is chosen rather than inherited.
-      "./node_modules/**"
+      //
+      // At any depth, not only the root: a pnpm, npm or yarn workspace keeps a
+      // node_modules per package, and `pnpm --filter app test` runs the one
+      // under packages/app.
+      "./**/node_modules/**"
     ],
     "allowMachLookup": [],
     "requiredEnv": []

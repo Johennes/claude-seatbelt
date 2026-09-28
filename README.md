@@ -170,15 +170,23 @@ Allowed before any profile is selected:
 | `~/.local/share/claude/versions/**` | The native installer's layout: one directory per installed version, so an update does not lock you out. Claude's bundled `rg` is the same binary under another `argv[0]`. |
 | `$CSB_CLAUDE` | Whatever you pointed the tool at, and what that resolves to. When it is a script rather than a binary — an npm or Homebrew install of Claude is `#!/usr/bin/env node` — the interpreter its shebang names as well, and for `env` also what `env` finds on `PATH`. |
 
-Entries are paths, in three forms:
+Entries are paths, or globs over paths:
 
 | form | means |
 | ---- | ----- |
 | `/usr/bin/git` | That binary. |
 | `~/.nvm/versions/node/**` | Everything below that directory. |
 | `./node_modules/**` | The same, taken from the workspace. |
+| `./**/node_modules/**` | A `**` anywhere spans directories, so this reaches a monorepo's `packages/*/node_modules` as well as the root's. |
+| `./packages/*/node_modules/**` | `*` and `?` stop at a slash. |
 
-Every entry is emitted twice: as written, and as it resolves through symlinks.
+Those three characters are the whole glob language; `[`, `{` and `}` are
+refused rather than passed through as literals that could never match.
+
+A path is emitted twice: as written, and as it resolves through symlinks. A glob
+is emitted once, as written — a pattern has no real path to resolve — and is
+matched against the path the kernel arrived at, so a glob over a symlinked
+directory has to be written for where the symlink points.
 Seatbelt matches the path the kernel arrived at, so a Homebrew command — a
 symlink into its Cellar — would otherwise be denied under the name you typed.
 Shims that are not symlinks have to be named in full: `/usr/bin/git` re-execs the
@@ -511,6 +519,13 @@ Enables running `pnpm` and `nvm` in the workspace, for instance:
 
     CSB_PROFILES="node" claude-seatbelt
 
+With nvm, select [unix](#unix) beside it. `nvm.sh`, sourced from the shell rc
+file, resolves the version to put on `PATH` by running `awk`, `grep`, `sort`,
+`tr`, `cut`, `head`, `tail`, `wc` and `ls` — none of which this profile grants —
+and without them the shell starts with no `node` on `PATH` at all:
+
+    CSB_PROFILES="unix node" claude-seatbelt
+
 The profile opens the version manager roots for **reading**:
 
 | | |
@@ -554,9 +569,11 @@ run` and `pnpm exec` reach for:
 
     CSB_PROFILES="node node-modules-exec" claude-seatbelt
 
-The grant is `./node_modules/**`, not `./node_modules/.bin`. Every name in `.bin`
-resolves into the package that provides it — with pnpm, another level down again
-under `.pnpm` — and Seatbelt matches the path the kernel arrived at.
+The grant is `./**/node_modules/**`, not `./node_modules/.bin`. Every name in
+`.bin` resolves into the package that provides it — with pnpm, another level down
+again under `.pnpm` — and Seatbelt matches the path the kernel arrived at. At any
+depth, because a pnpm, npm or yarn workspace keeps a `node_modules` per package,
+and `pnpm --filter app test` runs the one under `packages/app`.
 
 This is a grant over files a dependency update rewrites without anyone reading
 them. It is what running a repository's tests costs, and it is a separate profile

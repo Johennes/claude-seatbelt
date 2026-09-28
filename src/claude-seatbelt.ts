@@ -85,10 +85,21 @@ function words(value: string): string[] {
 /** The paths in a colon-separated variable (PATH-style) with "~/" expanded. */
 function paths(variable: string, allowRelative = false): string[] {
   const entries = (process.env[variable] ?? "").split(":").filter(Boolean);
-  const rejections = entries.filter((entry) => !isValidPathEntry(entry, allowRelative));
+  const rejections: string[] = [];
+  for (const entry of entries) {
+    if (!isValidPathEntry(entry, allowRelative)) {
+      rejections.push(`'${entry}' is ${validPathEntryForms(allowRelative)}`);
+    }
+    // Only an exec entry is a pattern this tool matches itself; the others go
+    // to srt, which has its own idea of a glob.
+    const unsupported = allowRelative ? unsupportedGlob(entry) : undefined;
+    if (unsupported) {
+      rejections.push(`'${entry}' uses '${unsupported}': a glob here is '*', '**' or '?' only`);
+    }
+  }
   if (rejections.length > 0) {
     for (const rejection of rejections) {
-      note(`${variable}: '${rejection}' is ${validPathEntryForms(allowRelative)}`);
+      note(`${variable}: ${rejection}`);
     }
     die(`refusing to run: ${rejections.length} invalid entry/entries in ${variable}`);
   }
@@ -565,6 +576,12 @@ function readProfiles(file: string): Map<string, Profile> {
             `${where}: '${key}' entry '${entry}' is ${validPathEntryForms(allowRelative)}`,
           );
         }
+        const unsupported = allowRelative ? unsupportedGlob(entry) : undefined;
+        if (unsupported) {
+          rejections.push(
+            `${where}: '${key}' entry '${entry}' uses '${unsupported}': a glob here is '*', '**' or '?' only`,
+          );
+        }
       }
     }
 
@@ -971,6 +988,15 @@ function buildExecRules(entries: string[]): string {
       : expandHome(entry);
     const subtree = expanded.endsWith("/**");
     const target = subtree ? expanded.slice(0, -3) : expanded;
+
+    // A glob anywhere but a trailing "/**" is a pattern, and a pattern has no
+    // real path to resolve: it is matched as written against the path the
+    // kernel arrived at. So a glob over a symlinked directory has to be written
+    // for where the symlink points, not for the symlink.
+    if (/[*?]/.test(target)) {
+      filters.add(`(regex ${sbplString(globToRegex(expanded))})`);
+      continue;
+    }
     for (const resolved of [target, realPath(target)]) {
       filters.add(`(${subtree ? "subpath" : "literal"} ${sbplString(resolved)})`);
     }
@@ -979,6 +1005,43 @@ function buildExecRules(entries: string[]): string {
   return ["", "(deny process-exec*)", `(allow process-exec* ${[...filters].join(" ")})`, ""].join(
     "\n",
   );
+}
+
+/**
+ * A glob as the anchored regex Seatbelt matches a path against: a double star
+ * spans directories, a single star and "?" stop at a slash, and everything else
+ * is itself. Verified against sandbox-exec: the character class, the dot-star
+ * and an optional group for "zero or more directories" all behave, which is
+ * what lets a node_modules pattern reach a monorepo's nested ones.
+ */
+function globToRegex(glob: string): string {
+  let regex = "";
+  for (let index = 0; index < glob.length; index++) {
+    const char = glob.charAt(index);
+    if (char === "*" && glob.charAt(index + 1) === "*") {
+      index++;
+      // "**/" is zero or more whole directories, so that "a/**/b" matches "a/b"
+      // too; a "**" not followed by a slash is simply anything.
+      if (glob.charAt(index + 1) === "/") {
+        index++;
+        regex += "(.*/)?";
+      } else {
+        regex += ".*";
+      }
+    } else if (char === "*") {
+      regex += "[^/]*";
+    } else if (char === "?") {
+      regex += "[^/]";
+    } else {
+      regex += /[.+()[\]{}^$|\\]/.test(char) ? `\\${char}` : char;
+    }
+  }
+  return `^${regex}$`;
+}
+
+/** The character in an exec entry that no glob here understands, if any. */
+function unsupportedGlob(entry: string): string | undefined {
+  return /[[\]{}]/.exec(entry)?.[0];
 }
 
 /** Where a path really is, or the path itself when it is not on this machine. */

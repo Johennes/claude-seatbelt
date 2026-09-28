@@ -380,6 +380,96 @@ describe("a claude that is a script", () => {
   });
 });
 
+// A glob is a pattern matched against the resolved path, translated into a
+// Seatbelt regex here. The only characters with meaning are "*", "**" and "?";
+// anything else that looks like a glob is refused rather than emitted as a
+// literal that could never match.
+describe("glob entries", () => {
+  let sandbox: SandboxResult;
+  const workspace = makeDir("exec-glob-ws");
+
+  before(() => {
+    // A monorepo's shape: one node_modules at the root, one per package.
+    fs.copyFileSync(
+      "/bin/date",
+      path.join(makeDir("exec-glob-ws", "node_modules", ".bin"), "tool"),
+    );
+    fs.copyFileSync(
+      "/bin/date",
+      path.join(makeDir("exec-glob-ws", "packages", "app", "node_modules", ".bin"), "tool"),
+    );
+    fs.copyFileSync("/bin/date", path.join(workspace, "elsewhere"));
+
+    sandbox = probeWithExec(
+      workspace,
+      ["/bin/d*", "./**/node_modules/**"],
+      [
+        `p star_match    '/bin/date'`,
+        `p star_no_match '/bin/echo x'`,
+        `p root_modules   './node_modules/.bin/tool'`,
+        `p nested_modules './packages/app/node_modules/.bin/tool'`,
+        `p outside        './elsewhere'`,
+      ].join("\n"),
+    );
+  });
+
+  it("a '*' matches within one path segment", () => {
+    assert.equal(sandbox.probe("star_match"), "allowed");
+    assert.equal(sandbox.probe("star_no_match"), "denied");
+  });
+
+  it("a '**' spans directories, so a nested node_modules is reached", () => {
+    assert.equal(sandbox.probe("root_modules"), "allowed");
+    assert.equal(sandbox.probe("nested_modules"), "allowed");
+  });
+
+  it("and grants nothing beside the pattern", () => {
+    assert.equal(sandbox.probe("outside"), "denied");
+  });
+
+  for (const [label, entry] of [
+    ["a character class", "/bin/d[a-z]te"],
+    ["a brace group", "/bin/{date,echo}"],
+  ] as const) {
+    it(`${label} stops the run`, () => {
+      const refused = sandboxRun({
+        extraDomains: "",
+        cwd: workspace,
+        script: `echo ${SENTINEL}`,
+        env: { CSB_EXTRA_EXEC: entry },
+      });
+      assert.ok(!refused.printed(SENTINEL), `expected nothing to run, got:\n${refused.output}`);
+      assert.ok(
+        refused.printed("a glob here is"),
+        `expected the refusal to say why, got:\n${refused.output}`,
+      );
+    });
+  }
+});
+
+// The node-modules-exec profile is a glob for the reason above: a pnpm, npm or
+// yarn workspace keeps a node_modules per package as well as the root one.
+describe("the node-modules-exec profile, in a monorepo", () => {
+  const workspace = makeDir("exec-monorepo-ws");
+
+  before(() => {
+    fs.copyFileSync(
+      "/bin/date",
+      path.join(makeDir("exec-monorepo-ws", "packages", "app", "node_modules", ".bin"), "tool"),
+    );
+  });
+
+  it("reaches a package's own node_modules", () => {
+    const sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: workspace,
+      env: { CSB_PROFILES: "node-modules-exec", CSB_EXTRA_EXEC: SLEEP },
+      script: `p nested './packages/app/node_modules/.bin/tool'`,
+    });
+    assert.equal(sandbox.probe("nested"), "allowed");
+  });
+});
+
 describe("the workspace-exec profile", () => {
   let sandbox: SandboxResult;
   const workspace = makeDir("exec-profile-ws");
