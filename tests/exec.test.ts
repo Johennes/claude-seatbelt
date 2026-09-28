@@ -345,6 +345,41 @@ describe("finding claude on PATH", () => {
   });
 });
 
+// An npm or Homebrew install of Claude is a `#!/usr/bin/env node` script, and
+// the interpreter a shebang names is an exec of its own. Both fixtures use
+// /bin/sh, which is on no base list, so what passes here is the shebang being
+// read — not an interpreter that happened to be allowed anyway.
+describe("a claude that is a script", () => {
+  const workspace = makeDir("exec-shebang-ws");
+  const script = `echo ${SENTINEL}`;
+
+  const fake = (name: string, shebang: string): string => {
+    const file = path.join(workspace, name);
+    writeFile(file, `${shebang}\nexec /bin/sh "$@"\n`);
+    fs.chmodSync(file, 0o755);
+    return file;
+  };
+
+  const runAs = (claude: string): SandboxResult =>
+    sandboxRun({
+      extraDomains: "",
+      cwd: workspace,
+      script,
+      // Nothing beyond the base list, or /usr/bin/env would be on it already.
+      env: { CSB_CLAUDE: claude, CSB_EXTRA_EXEC: "" },
+    });
+
+  it("gets its interpreter allow-listed", () => {
+    const sandbox = runAs(fake("direct", "#!/bin/sh"));
+    assert.ok(sandbox.printed(SENTINEL), `expected the script to run, got:\n${sandbox.output}`);
+  });
+
+  it("through /usr/bin/env, gets both env and what env finds", () => {
+    const sandbox = runAs(fake("via-env", "#!/usr/bin/env sh"));
+    assert.ok(sandbox.printed(SENTINEL), `expected the script to run, got:\n${sandbox.output}`);
+  });
+});
+
 describe("the workspace-exec profile", () => {
   let sandbox: SandboxResult;
   const workspace = makeDir("exec-profile-ws");

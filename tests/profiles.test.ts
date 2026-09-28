@@ -356,6 +356,53 @@ function skipUnlessGitPresent(): string | undefined {
   return version.status === 0 ? undefined : warnSkip("git is not on PATH");
 }
 
+describe("the git profile", { skip: skipUnlessGitPresent() }, () => {
+  let sandbox: SandboxResult;
+  const repo = makeGitWorkspace("git-ro-ws");
+
+  before(() => {
+    sandbox = sandboxProbe({
+      extraDomains: "",
+      cwd: repo,
+      env: { CSB_PROFILES: "git" },
+      script: [
+        `p git_status 'git status'`,
+        `p git_log    'git log --oneline'`,
+        // git-submodule is a shell script in git-core, so this is an exec of
+        // /bin/sh on top of the git binary's own.
+        `p submodule_status 'git submodule status'`,
+        `p git_commit 'git ${gitIdentity} commit -q --allow-empty -m probe'`,
+      ].join("\n"),
+    });
+  });
+
+  it("the sandbox ran and reported", () => {
+    assert.equal(sandbox.status, 0);
+  });
+
+  it("git runs", () => {
+    assert.equal(sandbox.probe("git_status"), "allowed");
+    assert.equal(sandbox.probe("git_log"), "allowed");
+  });
+
+  it("including the subcommands that are shell scripts", () => {
+    assert.equal(sandbox.probe("submodule_status"), "allowed");
+  });
+
+  it("but writing to .git is still denied", () => {
+    assert.equal(sandbox.probe("git_commit"), "denied");
+  });
+
+  it("and without the profile git does not run at all", () => {
+    const unselected = sandboxProbe({
+      extraDomains: "",
+      cwd: repo,
+      script: `p git_status 'git status'`,
+    });
+    assert.equal(unselected.probe("git_status"), "denied");
+  });
+});
+
 describe("the git-writable profile", { skip: skipUnlessGitPresent() }, () => {
   let sandbox: SandboxResult;
   const repo = makeGitWorkspace("git-ws");

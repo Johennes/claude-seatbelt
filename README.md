@@ -168,7 +168,7 @@ Allowed before any profile is selected:
 | `/bin/bash` | The shell srt starts inside the sandbox, which then starts Claude, and what Claude falls back to for a command when `$SHELL` is unset. |
 | `$SHELL` | This account's login shell, which is the one Claude runs a command with. When it is unset or names nothing, Claude falls back to `/bin/bash`, which is on the list anyway. |
 | `~/.local/share/claude/versions/**` | The native installer's layout: one directory per installed version, so an update does not lock you out. Claude's bundled `rg` is the same binary under another `argv[0]`. |
-| `$CSB_CLAUDE` | Whatever you pointed the tool at, and what that resolves to. |
+| `$CSB_CLAUDE` | Whatever you pointed the tool at, and what that resolves to. When it is a script rather than a binary — an npm or Homebrew install of Claude is `#!/usr/bin/env node` — the interpreter its shebang names as well, and for `env` also what `env` finds on `PATH`. |
 
 Entries are paths, in three forms:
 
@@ -447,6 +447,7 @@ What it names:
 | `/usr/bin/git` | The shim, which is not a symlink. |
 | `/Library/Developer/CommandLineTools/usr/bin/git`, the Xcode path beside it | What that shim re-execs. Naming only the shim stops git at its second exec. |
 | the `libexec/git-core` trees | git dispatches subcommands to its own helper binaries — `git-remote-https` for a fetch, `git-sh-setup` for the shell-based ones. |
+| `/bin/sh`, and `basename` `cat` `expr` `find` `sed` `sort` `uname` `wc` | Some of those helpers are shell scripts, `git-submodule` among them, so `git submodule status` is an exec of `/bin/sh` and of what `git-sh-setup` and `git-submodule` run on their way to `git submodule--helper`. Exactly those eight. The heavier scripts — `git-filter-branch`, `git-subtree`, `git-mergetool` — want the rest of the toolbox, which is [unix](#unix). |
 | `/opt/homebrew/bin/git`, `/usr/local/bin/git` and their `git-core` | Homebrew's git, which takes precedence on `PATH` where it is installed. |
 
 ### git-writable

@@ -132,6 +132,48 @@ function loginShell(): string {
   return shell.startsWith("/") ? shell : (which(shell) ?? "");
 }
 
+/**
+ * What a script's shebang line execs, for a CSB_CLAUDE that is a script rather
+ * than a binary: an npm or Homebrew install of Claude is `#!/usr/bin/env node`.
+ * The interpreter is an exec of its own, checked against the allowlist before
+ * the script runs a line, so it has to be on the list too. `/usr/bin/env X` is
+ * two execs — env, then whatever X resolves to on PATH — and both are named.
+ *
+ * Empty for a binary, which has no shebang, and for a script whose interpreter
+ * is not there to be found: nothing to allow, and the run fails the way it would
+ * have without this.
+ */
+function shebangInterpreters(file: string): string[] {
+  let head: string;
+  try {
+    // Only the first line matters, and 256 bytes is more than any shebang.
+    const fd = fs.openSync(realPath(file), "r");
+    try {
+      const buffer = Buffer.alloc(256);
+      const length = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      head = buffer.toString("utf8", 0, length);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return [];
+  }
+  if (!head.startsWith("#!")) return [];
+
+  const line = head.slice(2).split("\n")[0] ?? "";
+  const [interpreter = "", argument = ""] = line.trim().split(/\s+/);
+  if (!interpreter.startsWith("/")) return [];
+
+  const interpreters = [interpreter];
+  // `#!/usr/bin/env node`: env is what the kernel execs, node is what env then
+  // execs. A flag in that position (`env -S …`) is not a name to look up.
+  if (path.basename(interpreter) === "env" && argument && !argument.startsWith("-")) {
+    const target = which(argument);
+    if (target) interpreters.push(target);
+  }
+  return interpreters;
+}
+
 /** Resolve a directory, failing with one line rather than a stack trace. */
 function resolveDir(target: string): string {
   let resolved: string;
@@ -217,8 +259,10 @@ async function main(): Promise<never> {
     "/bin/bash",
     // This account's login shell, which is what Claude runs commands with.
     ...(config.shell ? [config.shell] : []),
-    // The (Claude) binary this run is pointed at.
+    // The (Claude) binary this run is pointed at, and — when it is a script
+    // rather than a binary — whatever its shebang line hands over to.
     config.claude,
+    ...shebangInterpreters(config.claude),
     // ~/.local/bin/claude symlinks into one of these directories. We allow-list
     // the entire folder so that an in-place update does not lock the user out.
     "~/.local/share/claude/versions/**",

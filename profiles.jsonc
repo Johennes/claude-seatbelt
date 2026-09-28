@@ -83,6 +83,23 @@
       // beside itself in libexec.
       "/Library/Developer/CommandLineTools/usr/libexec/git-core/**",
       "/Applications/Xcode.app/Contents/Developer/usr/libexec/git-core/**",
+      // Some of those helpers are shell scripts rather than binaries —
+      // git-submodule among them — so `git submodule status` is an exec of
+      // /bin/sh as well, and dies at `bad interpreter` without it.
+      "/bin/sh",
+      // And what those scripts run on their way to `git submodule--helper`,
+      // which does the actual work: git-sh-setup, sourced by every one of them,
+      // and git-submodule itself, between them reach for exactly these. The
+      // heavier scripts — git-filter-branch, git-subtree, git-mergetool — want
+      // the rest of the toolbox, which is the 'unix' profile.
+      "/usr/bin/basename",
+      "/bin/cat",
+      "/bin/expr",
+      "/usr/bin/find",
+      "/usr/bin/sed",
+      "/usr/bin/sort",
+      "/usr/bin/uname",
+      "/usr/bin/wc",
       // Homebrew's git, which takes precedence on PATH where it is installed.
       "/opt/homebrew/bin/git",
       "/opt/homebrew/opt/git/libexec/git-core/**",
