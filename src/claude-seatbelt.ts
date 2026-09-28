@@ -113,7 +113,7 @@ function isValidPathEntry(entry: string, allowRelative = false): boolean {
 function validPathEntryForms(allowRelative: boolean): string {
   return allowRelative
     ? "neither absolute nor under '~/' or './'"
-    : "neither absolute nor under '~/";
+    : "neither absolute nor under '~/'";
 }
 
 /** Locate a binary from PATH. */

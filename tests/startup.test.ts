@@ -56,6 +56,11 @@ describe("CSB_EXTRA_READ and CSB_EXTRA_WRITE entries that must stop the run", ()
       const sandbox = run("example.com", workspace, { [variable]: value });
       assert.ok(!sandbox.printed(SENTINEL), `expected nothing to run, got:\n${sandbox.output}`);
       assert.notEqual(sandbox.status, 0);
+      // The forms it names, closing quote included.
+      assert.ok(
+        sandbox.printed("neither absolute nor under '~/'"),
+        `expected the refusal to name the forms, got:\n${sandbox.output}`,
+      );
     });
   }
 });
@@ -213,6 +218,24 @@ describe("awkward characters in CSB_EXTRA_READ and CSB_EXTRA_WRITE", () => {
       CSB_EXTRA_WRITE: makeDir("back\\slashdir"),
     });
     assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+  });
+
+  // An apostrophe is the one character that matters to the exec splice: srt
+  // hands the Seatbelt profile back as a single-quoted shell argument, with
+  // every `'` inside it spelled `'"'"'`, and the splice has to read that back
+  // and write it out again. A path is the only way an apostrophe gets into the
+  // profile, and this is the only test that puts one there.
+  it("an apostrophe in CSB_EXTRA_READ does not stop the run", () => {
+    const sandbox = run("example.com", workspace, {
+      CSB_EXTRA_READ: makeDir("it's-a-dir"),
+    });
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+  });
+
+  it("an apostrophe in the workspace path does not stop the run", () => {
+    const sandbox = run("example.com", makeDir("it's-a-ws"));
+    assert.ok(sandbox.printed(SENTINEL), `expected the run to proceed, got:\n${sandbox.output}`);
+    assert.equal(sandbox.status, 0);
   });
 });
 
