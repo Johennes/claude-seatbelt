@@ -278,6 +278,52 @@ export function skipUnlessPresent(...targets: string[]): string | undefined {
   return absent.length === 0 ? undefined : warnSkip(`not on this machine: ${absent.join(", ")}`);
 }
 
+/** The real path of the first `pnpm` on PATH, or undefined when there is none. */
+export function resolvePnpm(): string | undefined {
+  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    try {
+      return fs.realpathSync(path.join(dir, "pnpm"));
+    } catch {
+      // Not this directory, keep looking.
+    }
+  }
+  return undefined;
+}
+
+/** Whether this machine's `pnpm` is one the base policy denies in the first place. */
+export function skipUnlessPnpmIsUnderHome(): string | undefined {
+  const pnpm = resolvePnpm();
+  if (pnpm?.startsWith(`${os.homedir()}${path.sep}`)) return undefined;
+  return warnSkip(`pnpm is not under $HOME on this machine (${pnpm ?? "none on PATH"})`);
+}
+
+/** The pnpm-bearing roots of the `node` profile. */
+const NODE_PROFILE_ROOTS = [
+  ".nvm",
+  ".config/nvm",
+  ".nodenv",
+  ".local/share/pnpm",
+  "Library/pnpm",
+  ".npm-global",
+  ".npm-packages",
+];
+
+/**
+ * A skip reason when the `node` profile does not cover this machine's `pnpm`,
+ * and undefined when it does. A CI runner's pnpm lives in ~/setup-pnpm, which is
+ * no version manager's root, so this is what keeps the node suite out of CI.
+ */
+export function skipUnlessProfileReachesPnpm(): string | undefined {
+  const roots = NODE_PROFILE_ROOTS.map((suffix) => inHome(suffix));
+  const pnpm = resolvePnpm();
+  if (pnpm !== undefined && roots.some((root) => pnpm.startsWith(`${root}${path.sep}`))) {
+    return undefined;
+  }
+  return warnSkip(
+    `the node profile does not reach this machine's pnpm (${pnpm ?? "none on PATH"})`,
+  );
+}
+
 /** Warn about skipped tests. */
 export function warnSkip(reason: string): string {
   if (process.env["GITHUB_ACTIONS"] === "true") {

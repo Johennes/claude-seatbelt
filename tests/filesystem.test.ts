@@ -14,7 +14,6 @@ import {
   writeFile,
 } from "./helpers.ts";
 
-const claudeCache = inHome(".cache", "claude");
 
 // The workspace, and two siblings that are not it. All are outside every path the
 // policy opens up, so the siblings are denied for the reason under test. One of
@@ -148,8 +147,6 @@ describe("the home directory", () => {
         `p read_app_support   'ls "$HOME/Library/Application Support"'`,
         `p read_ssh           'ls $HOME/.ssh'`,
         `p read_aws           'cat $HOME/.aws/credentials'`,
-        `p read_claude_config 'cat $HOME/.claude.json'`,
-        `p write_config       'touch $HOME/.claude.json'`,
         `p mkdir_config_lock  'mkdir $HOME/.claude.json.lock && rmdir $HOME/.claude.json.lock'`,
         `p write_config_tmp   'touch $HOME/.claude.json.tmp.probe && rm $HOME/.claude.json.tmp.probe'`,
         `p write_config_other 'touch $HOME/.claude.json.probe && rm $HOME/.claude.json.probe'`,
@@ -161,8 +158,6 @@ describe("the home directory", () => {
         `p write_claude_stgs  'touch $HOME/.claude/settings.json'`,
         `p write_claude_md    'touch $HOME/.claude/CLAUDE.md'`,
         `p write_claude_skill 'mkdir $HOME/.claude/skills/injected'`,
-        `p read_claude_cache  'ls $HOME/.cache/claude'`,
-        `p write_claude_cache 'touch $HOME/.cache/claude/probe'`,
         `p list_cache_root    'ls $HOME/.cache'`,
         `p read_gh_cache      'ls $HOME/.cache/gh'`,
         `p read_node_cache    'ls $HOME/.cache/node'`,
@@ -187,14 +182,6 @@ describe("the home directory", () => {
 
   it("cloud credentials are not readable", () => {
     assert.equal(sandbox.probe("read_aws"), "denied");
-  });
-
-  it("the claude config is readable", { skip: skipUnlessPresent(inHome(".claude.json")) }, () => {
-    assert.equal(sandbox.probe("read_claude_config"), "allowed");
-  });
-
-  it("the claude config is writable", { skip: skipUnlessPresent(inHome(".claude.json")) }, () => {
-    assert.equal(sandbox.probe("write_config"), "allowed");
   });
 
   // Claude never rewrites ~/.claude.json in place: it creates a lock directory
@@ -260,14 +247,6 @@ describe("the home directory", () => {
   // which also grants deleting the keychain. Neither is given.
   it("this user's keychain directory is not listable", () => {
     assert.equal(sandbox.probe("list_keychains"), "denied");
-  });
-
-  it("Claude's own cache is readable", { skip: skipUnlessPresent(claudeCache) }, () => {
-    assert.equal(sandbox.probe("read_claude_cache"), "allowed");
-  });
-
-  it("Claude's own cache is writable", { skip: skipUnlessPresent(claudeCache) }, () => {
-    assert.equal(sandbox.probe("write_claude_cache"), "allowed");
   });
 
   it("the rest of ~/.cache is not listable", () => {

@@ -682,7 +682,8 @@ covers files that arrive with a dependency update, and
 
 ## Tests
 
-    pnpm test   # builds first, then runs
+    pnpm test               # unit tests; also running on the CI
+    pnpm test:integration   # integration tests; only run on a real machine
 
 Behaviour tests only. Each one runs the real entry point with `CSB_CLAUDE=/bin/sh`
 and asserts what the sandboxed process can actually reach — not what the policy
@@ -705,10 +706,10 @@ itself as the workspace, and leave their scratch file in the gitignored
 | `tests/exec.test.ts` | what it can start: an allow-listed binary, the same one through a shell and through a shell below that, a binary copied into the workspace, a symlinked entry, a subtree entry, `./` entries, a shebang script |
 | `tests/escape.test.ts` | whether it can get another process to act for it |
 | `tests/startup.test.ts` | configurations that must stop it running at all |
-| `tests/profiles.test.ts` | what selecting `clipboard`, `gh`, `git`, `git-writable`, `node`, `node-modules-exec` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
+| `tests/profiles.test.ts` | what selecting `clipboard`, `gh`, `git`, `git-writable`, `node-modules-exec` or `node-modules-writable` adds, and what it still does not — each probe paired with the same one unselected, and the pairs that are meant to be combined |
+| `tests/integration/filesystem.test.ts` | that `~/.claude.json` and `~/.cache/claude` are readable and writable, which needs a Claude that has run here |
+| `tests/integration/profiles.test.ts` | what `gh` does with `~/.config/gh`, and what `node` does with a pnpm it reaches: on `PATH`, `pnpm lint` running, the formatter writing, `node_modules` still closed |
 
 Every test sets `CSB_EXTRA_EXEC` to the toolbox its probes are built from. Without
 it a probe would report "denied" because `cat` could not start, whatever the
 policy under test says.
-
-Note that some tests are skipped when run under GitHub actions due to environment restrictions.

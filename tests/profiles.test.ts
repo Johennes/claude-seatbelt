@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { after, before, describe, it } from "node:test";
+import { before, describe, it } from "node:test";
 
 import {
-  inHome,
   makeDir,
   repoRoot,
   type SandboxResult,
   sandboxProbe,
   sandboxRun,
-  skipUnlessPresent,
+  skipUnlessPnpmIsUnderHome,
   warnSkip,
   writeFile,
 } from "./helpers.ts";
@@ -24,58 +22,8 @@ const workspace = makeDir("profiles-ws");
 // authenticates against GitHub — CSB_CLAUDE is /bin/sh.
 const token = { GH_TOKEN: "test-token" };
 
-const ghConfigDir = inHome(".config", "gh");
-const corepackCache = inHome(".cache", "node");
-
 const run = (env: Record<string, string>, script = `echo ${SENTINEL}`) =>
   sandboxRun({ extraDomains: "", cwd: workspace, script, env });
-
-/** The real path of the first `pnpm` on PATH, or undefined when there is none. */
-function resolvePnpm(): string | undefined {
-  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
-    try {
-      return fs.realpathSync(path.join(dir, "pnpm"));
-    } catch {
-      // Not this directory, keep looking.
-    }
-  }
-  return undefined;
-}
-
-/** Whether this machine's `pnpm` is one the base policy denies in the first place. */
-function skipUnlessPnpmIsUnderHome(): string | undefined {
-  const pnpm = resolvePnpm();
-  if (pnpm?.startsWith(`${os.homedir()}${path.sep}`)) return undefined;
-  return warnSkip(`pnpm is not under $HOME on this machine (${pnpm ?? "none on PATH"})`);
-}
-
-/**
- * The pnpm-bearing roots of `node` profile.
- */
-const NODE_PROFILE_ROOTS = [
-  ".nvm",
-  ".config/nvm",
-  ".nodenv",
-  ".local/share/pnpm",
-  "Library/pnpm",
-  ".npm-global",
-  ".npm-packages",
-];
-
-/**
- * A skip reason when the `node` profile does not cover this machine's `pnpm`,
- * and undefined when it does.
- */
-function skipUnlessProfileReachesPnpm(): string | undefined {
-  const roots = NODE_PROFILE_ROOTS.map((suffix) => inHome(suffix));
-  const pnpm = resolvePnpm();
-  if (pnpm !== undefined && roots.some((root) => pnpm.startsWith(`${root}${path.sep}`))) {
-    return undefined;
-  }
-  return warnSkip(
-    `the node profile does not reach this machine's pnpm (${pnpm ?? "none on PATH"})`,
-  );
-}
 
 describe("selecting profiles", () => {
   it("no CSB_PROFILES runs, and says nothing about profiles", () => {
@@ -212,7 +160,6 @@ describe("the clipboard profile, not selected", () => {
 
 describe("the gh profile, selected", () => {
   let sandbox: SandboxResult;
-  const ghConfig = inHome(".config", "gh");
 
   before(() => {
     sandbox = sandboxProbe({
@@ -220,8 +167,6 @@ describe("the gh profile, selected", () => {
       cwd: workspace,
       env: { ...token, CSB_PROFILES: "gh" },
       script: [
-        `p read_gh_config  'ls "${ghConfig}"'`,
-        `p write_gh_config 'touch "${ghConfig}/injected"'`,
         `p reach_api       'curl -sS -o /dev/null --max-time 15 https://api.github.com'`,
         // The host the OAuth device flow lives on. Not opened, so no new token
         // can be minted from inside.
@@ -237,15 +182,6 @@ describe("the gh profile, selected", () => {
 
   it("the sandbox ran and reported", () => {
     assert.equal(sandbox.status, 0);
-  });
-
-  it("the gh config directory is readable", { skip: skipUnlessPresent(ghConfigDir) }, () => {
-    assert.equal(sandbox.probe("read_gh_config"), "allowed");
-  });
-
-  // extraRead opens a path to read, not to write, exactly as CSB_EXTRA_READ does.
-  it("the gh config directory is not writable", { skip: skipUnlessPresent(ghConfigDir) }, () => {
-    assert.equal(sandbox.probe("write_gh_config"), "denied");
   });
 
   it("the GitHub API is reachable", () => {
@@ -270,25 +206,12 @@ describe("the gh profile, selected", () => {
 });
 
 describe("the gh profile, not selected", () => {
-  let sandbox: SandboxResult;
-  const ghConfig = inHome(".config", "gh");
-
-  before(() => {
-    sandbox = sandboxProbe({
+  it("the GitHub API is not reachable", () => {
+    const sandbox = sandboxProbe({
       extraDomains: "",
       cwd: workspace,
-      script: [
-        `p read_gh_config 'ls "${ghConfig}"'`,
-        `p reach_api      'curl -sS -o /dev/null --max-time 15 https://api.github.com'`,
-      ].join("\n"),
+      script: `p reach_api 'curl -sS -o /dev/null --max-time 15 https://api.github.com'`,
     });
-  });
-
-  it("the gh config directory is not readable", { skip: skipUnlessPresent(ghConfigDir) }, () => {
-    assert.equal(sandbox.probe("read_gh_config"), "denied");
-  });
-
-  it("the GitHub API is not reachable", () => {
     assert.equal(sandbox.probe("reach_api"), "denied");
   });
 });
@@ -570,90 +493,10 @@ describe("the git-writable and gh profiles together", { skip: skipUnlessGitPrese
   });
 });
 
-describe("the node profile", { skip: skipUnlessProfileReachesPnpm() }, () => {
-  let sandbox: SandboxResult;
-  // Where the formatter probe puts its scratch file. Inside this repository,
-  // since that is the workspace here, and gitignored.
-  const scratch = path.join(repoRoot, ".testenv");
-
-  before(() => {
-    // The probes below use `touch`, which cannot create a file whose parent is
-    // missing — without this a denial could as easily be ENOENT as EPERM. This
-    // is the directory vite makes for itself in a project that uses it.
-    fs.mkdirSync(path.join(repoRoot, "node_modules", ".vite-temp"), { recursive: true });
-    sandbox = sandboxProbe({
-      extraDomains: "",
-      cwd: repoRoot,
-      env: { CSB_PROFILES: "node node-modules-exec" },
-      script: [
-        `p pnpm_resolves 'command -v pnpm'`,
-        // The base deny, which this profile no longer lifts. That is
-        // node-modules-writable's job, and it is not selected here.
-        `p write_vite_temp 'touch node_modules/.vite-temp/probe.mjs'`,
-        `p write_nm_pkg    'touch node_modules/probe.js'`,
-        `p write_nm_bin    'touch node_modules/.bin/probe'`,
-        `p read_node_cache  'ls "${inHome(".cache", "node")}"'`,
-        `p write_node_cache 'touch "${inHome(".cache", "node", "probe")}"'`,
-        `p pnpm_lint     'pnpm lint'`,
-        `p pnpm_format   'pnpm format:check'`,
-        // `pnpm format` differs from `format:check` only in writing, so the
-        // write is proven on a scratch file rather than by reformatting the
-        // repository from inside a test. Written, formatted and checked inside
-        // the sandbox, so the probe's exit status is the whole claim.
-        `p oxfmt_writes  'mkdir -p .testenv && printf "export  const   x =   {a:1,b:2}\\n" > .testenv/messy.ts && pnpm exec oxfmt .testenv/messy.ts && grep -q "const x = { a: 1, b: 2 }" .testenv/messy.ts'`,
-      ].join("\n"),
-    });
-  });
-
-  after(() => {
-    fs.rmSync(scratch, { recursive: true, force: true });
-  });
-
-  it("the sandbox ran and reported", () => {
-    assert.equal(sandbox.status, 0);
-  });
-
-  it("pnpm is on PATH", () => {
-    assert.equal(sandbox.probe("pnpm_resolves"), "allowed");
-  });
-
-  it("a build tool's scratch directory under node_modules stays closed", () => {
-    assert.equal(sandbox.probe("write_vite_temp"), "denied");
-  });
-
-  it("package code under node_modules stays closed", () => {
-    assert.equal(sandbox.probe("write_nm_pkg"), "denied");
-  });
-
-  it("node_modules/.bin stays closed", () => {
-    assert.equal(sandbox.probe("write_nm_bin"), "denied");
-  });
-
-  it("the corepack cache is readable", { skip: skipUnlessPresent(corepackCache) }, () => {
-    assert.equal(sandbox.probe("read_node_cache"), "allowed");
-  });
-
-  // Reading is enough: a version already fetched outside the sandbox runs from
-  // here, and fetching a new one would need the network the profile never opens.
-  it("the corepack cache is not writable", { skip: skipUnlessPresent(corepackCache) }, () => {
-    assert.equal(sandbox.probe("write_node_cache"), "denied");
-  });
-
-  it("pnpm lint runs", () => {
-    assert.equal(sandbox.probe("pnpm_lint"), "allowed");
-  });
-
-  it("pnpm format:check runs", () => {
-    assert.equal(sandbox.probe("pnpm_format"), "allowed");
-  });
-
-  it("the formatter can rewrite a file in the workspace", () => {
-    assert.equal(sandbox.probe("oxfmt_writes"), "allowed");
-  });
-});
-
 // Selected beside `node`, which is how it is meant to be used: the override is
-// no use on its own to a toolchain the base policy cannot reach.
+// no use on its own to a toolchain the base policy cannot reach. The `node`
+// profile's own probes — pnpm on PATH, `pnpm lint` running — are integration
+// tests: they need a pnpm the profile reaches, which a CI runner's is not.
 describe("the node-modules-writable profile", () => {
   let sandbox: SandboxResult;
 

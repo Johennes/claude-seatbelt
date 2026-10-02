@@ -26,6 +26,8 @@
     "start": "node dist/claude-seatbelt.js",
     "pretest": "pnpm run build",
     "test": "node --test tests/*.test.ts",
+    "pretest:integration": "pnpm run build",
+    "test:integration": "node --test tests/integration/*.test.ts",
     "prepare": "pnpm run build"
   },
   "devDependencies": {
