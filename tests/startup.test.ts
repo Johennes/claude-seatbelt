@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -167,6 +168,62 @@ describe("the policy it prints", () => {
       !sandbox.printed("(deny process-exec*)"),
       `expected no policy, got:\n${sandbox.output}`,
     );
+  });
+});
+
+// Claude is told what it is running under through --append-system-prompt, which
+// Claude Code honours in -p and interactive mode alike (checked by hand against
+// 2.1.252: a marker in the prompt came back in both). What is asserted here is
+// the argument reaching the binary, through a fake claude that prints its argv.
+describe("the briefing", () => {
+  const briefed = makeDir("briefing-ws");
+  const fake = path.join(briefed, "claude");
+
+  // Every argument on its own line, so the flag and its value can be found.
+  writeFile(fake, "#!/bin/bash\nprintf '%s\\n' \"$@\"\n");
+  fs.chmodSync(fake, 0o755);
+
+  const runFake = (env: Record<string, string>) =>
+    sandboxRun({
+      extraDomains: "",
+      cwd: briefed,
+      script,
+      env: { CSB_CLAUDE: fake, CSB_PROFILES: "unix", CSB_EXTRA_EXEC: "/usr/bin/printf", ...env },
+    });
+
+  it("is passed, and names the policy", () => {
+    const sandbox = runFake({});
+    assert.ok(
+      sandbox.stdout.includes("--append-system-prompt"),
+      `expected the flag, got:\n${sandbox.output}`,
+    );
+    for (const expected of [
+      // Neither the profile nor the workspace by name: the profile shows up as
+      // what it adds — sed on the exec list — and the workspace as what the
+      // policy opens.
+      "claude-seatbelt",
+      "allow read:",
+      "deny write:",
+      briefed,
+      "/usr/bin/sed",
+      // srt's own mandatory denies, read out of the profile and turned back into
+      // globs — with the literal twin each one comes with dropped as redundant.
+      `${briefed}/**/.mcp.json`,
+      `${briefed}/**/.git/hooks/**`,
+    ]) {
+      assert.ok(
+        sandbox.stdout.includes(expected),
+        `expected '${expected}', got:\n${sandbox.output}`,
+      );
+    }
+  });
+
+  // Given the flag twice, Claude keeps the last one, so this is what lets a
+  // caller's own --append-system-prompt win.
+  it("goes in front of the caller's own arguments", () => {
+    const sandbox = runFake({});
+    const lines = sandbox.stdout.split("\n");
+    assert.ok(lines.indexOf("--append-system-prompt") < lines.indexOf("-c"));
   });
 });
 

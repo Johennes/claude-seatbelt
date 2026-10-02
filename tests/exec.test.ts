@@ -5,6 +5,7 @@ import path from "node:path";
 import { before, describe, it } from "node:test";
 
 import {
+  fakeClaude,
   makeDir,
   type SandboxResult,
   sandboxProbe,
@@ -227,9 +228,9 @@ describe("the base list", () => {
     sandbox = sandboxProbe({
       extraDomains: "",
       cwd: workspace,
-      // Not the /bin/sh the other suites use: CSB_CLAUDE is allow-listed for
-      // execution, which would grant the very thing under test here.
-      env: { CSB_CLAUDE: "/bin/bash", CSB_EXTRA_EXEC: SLEEP },
+      // The harness's shim execs bash, not sh, so CSB_CLAUDE — allow-listed for
+      // execution — does not grant the very thing under test here.
+      env: { CSB_EXTRA_EXEC: SLEEP },
       script: [`p bash '/bin/bash -c "exit 0"'`, `p sh '/bin/sh -c "exit 0"'`].join("\n"),
     });
   });
@@ -246,7 +247,7 @@ describe("the base list", () => {
     const withUnix = sandboxProbe({
       extraDomains: "",
       cwd: workspace,
-      env: { CSB_CLAUDE: "/bin/bash", CSB_EXTRA_EXEC: SLEEP, CSB_PROFILES: "unix" },
+      env: { CSB_EXTRA_EXEC: SLEEP, CSB_PROFILES: "unix" },
       script: `p sh '/bin/sh -c "exit 0"'`,
     });
     assert.equal(withUnix.probe("sh"), "allowed");
@@ -316,9 +317,7 @@ describe("finding claude on PATH", () => {
     // Something that behaves like Claude for the length of one `-c`. A script
     // rather than a copied /bin/sh: macOS launch constraints SIGKILL a system
     // shell that runs from anywhere but its own path, sandbox or no sandbox.
-    const fake = path.join(workspace, "claude");
-    writeFile(fake, '#!/bin/bash\nexec /bin/bash "$@"\n');
-    fs.chmodSync(fake, 0o755);
+    fakeClaude(path.join(workspace, "claude"));
   });
 
   it("an absolute PATH entry answers", () => {
@@ -390,12 +389,8 @@ describe("a claude that is a script", () => {
   const workspace = makeDir("exec-shebang-ws");
   const script = `echo ${SENTINEL}`;
 
-  const fake = (name: string, shebang: string): string => {
-    const file = path.join(workspace, name);
-    writeFile(file, `${shebang}\nexec /bin/sh "$@"\n`);
-    fs.chmodSync(file, 0o755);
-    return file;
-  };
+  const fake = (name: string, shebang: string): string =>
+    fakeClaude(path.join(workspace, name), shebang, "/bin/sh");
 
   const runAs = (claude: string): SandboxResult =>
     sandboxRun({

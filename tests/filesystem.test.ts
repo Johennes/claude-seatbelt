@@ -14,7 +14,6 @@ import {
   writeFile,
 } from "./helpers.ts";
 
-
 // The workspace, and two siblings that are not it. All are outside every path the
 // policy opens up, so the siblings are denied for the reason under test. One of
 // them has a space in its name, which CSB_EXTRA_READ has to be able to carry.

@@ -338,8 +338,22 @@ async function main(): Promise<never> {
     process.on(signal, () => {});
   }
 
+  // Compile a briefing to let Claude know that it is running sandboxed. This
+  // requires the rules from the final Seatbelt profile. Since that profile
+  // is wrapped around the command carrying the briefing, we need to acquire
+  // a preview here to be able to construct the briefing.
+  const preview_command = config.claude;
+  const preview_wrapped = await SandboxManager.wrapWithSandbox(preview_command, "/bin/bash");
+  const preview_sandboxed = locateProfile(spliceExecRules(preview_wrapped, allowExec)).profile;
+  const briefing = buildBriefing(extractBriefingRules(preview_sandboxed), settings.network.allowedDomains);
+
   // Construct the plain shell command to launch the binary.
-  const command = quoteShellArgs([config.claude, ...process.argv.slice(2)]);
+  const command = quoteShellArgs([
+    config.claude,
+    "--append-system-prompt",
+    briefing,
+    ...process.argv.slice(2),
+  ]);
 
   // Wrap the command to run in the sandbox. The shell argument is what srt launches
   // inside the sandbox and has to be in the allowed executables injected below. We
@@ -1084,6 +1098,30 @@ function sbplString(target: string): string {
   return `"${target.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+/**
+ * Builds the prompt used to let Claude know that it is running sandboxed and to
+ * put up some guardrails for it.
+ */
+function buildBriefing(rules: string, allowedDomains: string[]): string {
+  // One host per line rather than the per-port, per-wildcard entries srt takes.
+  const hosts = [...new Set(allowedDomains.map((entry) => entry.replace(/:\d+$/, "")))];
+  return [
+    "You are running under a macOS Seatbelt sandbox with the following key rules",
+    "for reading, writing and executing files:",
+    "",
+    rules,
+    "",
+    "Your networking is restricted by a proxy to the following reachable hosts:",
+    "",
+    ...hosts.map((host) => `  ${host}`),
+    "",
+    "If you don't understand any of these sandbox rules, ask me to clarify. Do",
+    "not try to escape the sandbox. If you need to do something that is restricted",
+    "and you cannot find an efficient workaround, stop and ask me what to do. If",
+    "you think you accidentally breached the sandbox, stop and tell me."
+  ].join("\n");
+}
+
 /** Quote one argument so a POSIX shell parses it back to exactly these bytes. */
 function quoteShellArg(argument: string): string {
   // Single quotes make every byte literal, so a quote is the only thing needing
@@ -1109,6 +1147,18 @@ function quoteShellArgs(args: string[]): string {
  * machine while reporting that it does not.
  */
 function spliceExecRules(wrapped: string, entries: string[]): string {
+  const { start, end, profile } = locateProfile(wrapped);
+  return (
+    wrapped.slice(0, start) + quoteShellArg(profile + buildExecRules(entries)) + wrapped.slice(end)
+  );
+}
+
+/**
+ * Find the Seatbelt profile inside srt's wrapped command, and where its quoted
+ * argument starts and ends. Anything unexpected about the shape stops the run:
+ * a profile that cannot be found cannot be extended either.
+ */
+function locateProfile(wrapped: string): { start: number; end: number; profile: string } {
   const SANDBOX_EXEC = "/usr/bin/sandbox-exec -p ";
   const marker = wrapped.indexOf(SANDBOX_EXEC);
   if (marker < 0) {
@@ -1116,18 +1166,98 @@ function spliceExecRules(wrapped: string, entries: string[]): string {
   }
 
   const start = marker + SANDBOX_EXEC.length;
-  const profile = readShellArg(wrapped, start);
-  if (!profile) {
+  const argument = readShellArg(wrapped, start);
+  if (!argument) {
     die("cannot read the Seatbelt profile out of the sandbox-runtime command");
   }
-  if (!profile.value.trimStart().startsWith("(version 1)")) {
+  if (!argument.value.trimStart().startsWith("(version 1)")) {
     die("what sandbox-runtime passes to sandbox-exec is not a Seatbelt profile");
   }
+  return { start, end: argument.end, profile: argument.value };
+}
 
-  const rules = buildExecRules(entries);
-  return (
-    wrapped.slice(0, start) + quoteShellArg(profile.value + rules) + wrapped.slice(profile.end)
-  );
+/**
+ * Extracts the part of the Seatbelt profile that is relevant to Claude's briefing.
+ */
+function extractBriefingRules(profile: string): string {
+  const sections: string[] = [];
+  const wanted: Record<string, string> = {
+    "allow file-read*": "allow read",
+    "deny file-read*": "deny read",
+    "allow file-write*": "allow write",
+    "deny file-write*": "deny write",
+    "allow process-exec*": "allow exec",
+  };
+
+  for (const block of sbplBlocks(profile)) {
+    // The operations between `(allow`/`(deny` and the first filter, which has
+    // to be exactly one of the four: the pty block is `file-read* file-write*`
+    // on /dev/ptmx, and is not a filesystem rule in any sense that matters.
+    const head = /^\((allow|deny)\s+([^()]*?)\s*(?:\(|$)/.exec(block);
+    const label = head ? wanted[`${head[1]} ${head[2]?.trim()}`] : undefined;
+    if (!label) continue;
+
+    const entries: string[] = [];
+    for (const [, kind, value] of block.matchAll(
+      /\((subpath|literal|regex) "((?:[^"\\]|\\.)*)"\)/g,
+    )) {
+      const text = (value ?? "").replaceAll('\\"', '"').replaceAll("\\\\", "\\");
+      entries.push(kind === "regex" ? regexToGlob(text) : text);
+    }
+    // A bare `(allow file-read*)` is "everything", which the prose says already.
+    if (entries.length === 0) continue;
+
+    // srt emits each of its own denies twice, as the literal at the workspace
+    // root and as the pattern at any depth. The pattern covers the literal.
+    const covered = new Set<string>();
+    for (const entry of entries) {
+      const glob = /^(.*)\/\*\*\/(.+?)(\/\*\*)?$/.exec(entry);
+      if (glob) covered.add(`${glob[1]}/${glob[2]}`);
+    }
+    const kept = [...new Set(entries)].filter((entry) => !covered.has(entry));
+    sections.push(`${label}:\n${kept.map((entry) => `  ${entry}`).join("\n")}`);
+  }
+  return sections.join("\n");
+}
+
+/** A regex-escaped character back to itself. */
+function unescapeRegex(text: string): string {
+  return text.replaceAll(/\\(.)/g, "$1");
+}
+
+/** Split a Seatbelt profile into its top-level forms, one `(allow …)` or `(deny …)` each. */
+function sbplBlocks(profile: string): string[] {
+  const blocks: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of profile) {
+    if (depth === 0 && char !== "(") continue;
+    current += char;
+    if (char === "(") depth++;
+    if (char === ")" && --depth === 0) {
+      blocks.push(current);
+      current = "";
+    }
+  }
+  return blocks;
+}
+
+/**
+ * srt's glob-turned-regex back into the glob. srt spells `**\/` as `(.*\/)?`, a
+ * `*` as `[^/]*`, a trailing tree as `/.*`, and "or anything below" — which is
+ * what a path means here anyway — as `(/.*)?`. Anything that is not one of
+ * those comes back as the regex it was, marked as such.
+ */
+function regexToGlob(regex: string): string {
+  const glob = regex
+    .replace(/^\^/, "")
+    .replace(/\$$/, "")
+    .replaceAll("(.*/)?", "**/")
+    .replace(/\(\/\.\*\)\?$/, "")
+    .replace(/\/\.\*$/, "/**")
+    .replaceAll("[^/]*", "*");
+  // Any regex syntax still standing is one this does not understand.
+  return /[()[\]^$+?|]|(?<!\\)\.\*/.test(glob) ? `regex ${regex}` : unescapeRegex(glob);
 }
 
 /**

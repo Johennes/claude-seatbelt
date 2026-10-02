@@ -212,6 +212,13 @@ Claude fetched or a script it just wrote is denied. Grant what a repository need
 with `./`-prefixed entries, the [node-modules-exec](#node-modules-exec) profile
 for its installed tools, or [workspace-exec](#workspace-exec) for the lot.
 
+### Briefing
+
+Claude is made aware of running sandboxed via `--append-system-prompt`. This
+has some token cost but avoids Claude trying hard to get out of the sandbox.
+If you call claude-seatbelt with your own `--append-system-prompt`, it will
+overwrite the default flag.
+
 ### Environment
 
 The sandboxed process inherits the whole environment of whatever started
@@ -685,8 +692,9 @@ covers files that arrive with a dependency update, and
     pnpm test               # unit tests; also running on the CI
     pnpm test:integration   # integration tests; only run on a real machine
 
-Behaviour tests only. Each one runs the real entry point with `CSB_CLAUDE=/bin/sh`
-and asserts what the sandboxed process can actually reach — not what the policy
+Behaviour tests only. Each one runs the real entry point with `CSB_CLAUDE` set to
+a shim that drops the [briefing](#briefing) and execs `bash -c <script>`, and
+asserts what the sandboxed process can actually reach — not what the policy
 says. A domain being absent from an allowlist is not the claim; the sandboxed
 process failing to reach it is. The policy printed at startup is there to be
 read, and is deliberately not what these assert against: a rule can be present

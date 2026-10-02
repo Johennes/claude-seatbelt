@@ -26,6 +26,39 @@ process.on("exit", () => {
   fs.rmSync(testTmp, { recursive: true, force: true });
 });
 
+/**
+ * Write a script that stands in for Claude. claude-seatbelt puts
+ * `--append-system-prompt <briefing>` in front of whatever it is given, which a
+ * shell would read as an option of its own, so the shim drops that pair and
+ * execs `interpreter` with the rest — the harness's `-c <script>`.
+ *
+ * `shebang` is what the kernel execs to run the shim, and is a claim of its own
+ * in the tests about a Claude that is a script.
+ */
+export function fakeClaude(
+  file: string,
+  shebang = "#!/bin/bash",
+  interpreter = "/bin/bash",
+): string {
+  writeFile(
+    file,
+    [shebang, '[ "$1" = --append-system-prompt ] && shift 2', `exec ${interpreter} "$@"`, ""].join(
+      "\n",
+    ),
+  );
+  fs.chmodSync(file, 0o755);
+  return file;
+}
+
+// The shim every test runs through. In $TMPDIR rather than under the test root:
+// the test root is under $HOME, which the sandbox denies for reading, and a
+// script it cannot read is a script it cannot start.
+const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-seatbelt-shim."));
+process.on("exit", () => {
+  fs.rmSync(shimDir, { recursive: true, force: true });
+});
+export const SHIM = fakeClaude(path.join(shimDir, "claude"));
+
 /** Options to pass to binary. */
 export interface SandboxOptions {
   /** Value for CSB_EXTRA_DOMAINS. */
@@ -171,9 +204,12 @@ function sandboxEnv(options: SandboxOptions): NodeJS.ProcessEnv {
     CSB_UNSET_ENV: "",
     CSB_EXTRA_EXEC: PROBE_EXEC,
     CSB_EXTRA_DOMAINS: options.extraDomains,
-    CSB_CLAUDE: "/bin/sh",
-    // Required, and never actually authenticated against: CSB_CLAUDE is
-    // /bin/sh. A test that is about the requirement itself clears it again
+    // A shim standing in for Claude: it drops the briefing's
+    // --append-system-prompt pair, which a shell would otherwise read as an
+    // option of its own, and execs bash with the rest — the `-c <script>`.
+    CSB_CLAUDE: SHIM,
+    // Required, and never actually authenticated against: nothing here is
+    // Claude. A test that is about the requirement itself clears it again
     // through `env`.
     CLAUDE_CODE_OAUTH_TOKEN: "test-token",
     ...options.env,
